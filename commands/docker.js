@@ -134,7 +134,15 @@ module.exports = {
           .setLabel("Refresh")
           .setStyle(ButtonStyle.Primary);
 
-        const row = new ActionRowBuilder().addComponents(refreshButton);
+        const dockerContainers = new ButtonBuilder()
+          .setCustomId("docker_containers")
+          .setLabel("Docker Containers")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          dockerContainers
+        );
 
         await interaction.editReply({ embeds: [embed], components: [row] });
       } else if (subcommand === "containers") {

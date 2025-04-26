@@ -1,6 +1,12 @@
 const systemMonitor = require("../utils/systemMonitor");
 const dockerMonitor = require("../utils/dockerMonitor");
 const embedBuilder = require("../utils/embedBuilder");
+const {
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
+  StringSelectMenuBuilder,
+} = require("discord.js");
 
 module.exports = {
   name: "interactionCreate",
@@ -40,6 +46,69 @@ module.exports = {
           `Error handling autocomplete for ${interaction.commandName}`
         );
         console.error(error);
+      }
+    }
+
+    // Handle select menu interactions
+    else if (interaction.isStringSelectMenu()) {
+      try {
+        const customId = interaction.customId;
+
+        // Handle container selection
+        if (customId === "container_select") {
+          await interaction.deferUpdate();
+
+          const containerId = interaction.values[0];
+          const containerInfo = await dockerMonitor.getContainerInfo(
+            containerId
+          );
+          const embed = embedBuilder.createContainerDetailsEmbed(containerInfo);
+
+          // Create action buttons for the container
+          const startButton = new ButtonBuilder()
+            .setCustomId(`container_start_${containerInfo.id}`)
+            .setLabel("Start")
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(containerInfo.state.running);
+
+          const stopButton = new ButtonBuilder()
+            .setCustomId(`container_stop_${containerInfo.id}`)
+            .setLabel("Stop")
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!containerInfo.state.running);
+
+          const restartButton = new ButtonBuilder()
+            .setCustomId(`container_restart_${containerInfo.id}`)
+            .setLabel("Restart")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(!containerInfo.state.running);
+
+          const logsButton = new ButtonBuilder()
+            .setCustomId(`container_logs_${containerInfo.id}`)
+            .setLabel("Logs")
+            .setStyle(ButtonStyle.Secondary);
+
+          const backButton = new ButtonBuilder()
+            .setCustomId("docker_containers")
+            .setLabel("Back to List")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            startButton,
+            stopButton,
+            restartButton,
+            logsButton,
+            backButton
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+      } catch (error) {
+        console.error("Error handling select menu interaction:", error);
+        await interaction.reply({
+          content: "There was an error handling this interaction.",
+          ephemeral: true,
+        });
       }
     }
 
@@ -195,6 +264,95 @@ module.exports = {
           );
 
           await interaction.editReply({ embeds: [embed] });
+        }
+
+        // Docker containers button - shows container list
+        else if (customId === "docker_containers") {
+          await interaction.deferUpdate();
+
+          // Get all containers (including stopped ones)
+          const containers = await dockerMonitor.listContainers(true);
+          const embed = embedBuilder.createContainerListEmbed(containers);
+
+          // Create the refresh button
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_containers")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          // Create the Docker Info button to go back
+          const dockerInfoButton = new ButtonBuilder()
+            .setCustomId("docker_info")
+            .setLabel("Docker Info")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            dockerInfoButton
+          );
+
+          // Create the select menu for container actions if we have containers
+          if (containers.length > 0) {
+            // Get up to 25 containers (Discord limit for select menu)
+            const menuContainers = containers.slice(0, 25);
+
+            // Create the select menu
+            const containerSelect = new StringSelectMenuBuilder()
+              .setCustomId("container_select")
+              .setPlaceholder("Select a container for details...")
+              .addOptions(
+                menuContainers.map((container) => ({
+                  label: container.names[0] || container.id.substring(0, 12),
+                  description: `${container.image} (${container.state})`,
+                  value: container.id,
+                  emoji:
+                    container.state === "running"
+                      ? "✅"
+                      : container.state === "exited"
+                      ? "⛔"
+                      : "⚠️",
+                }))
+              );
+
+            const selectRow = new ActionRowBuilder().addComponents(
+              containerSelect
+            );
+
+            await interaction.editReply({
+              embeds: [embed],
+              components: [row, selectRow],
+            });
+          } else {
+            await interaction.editReply({
+              embeds: [embed],
+              components: [row],
+            });
+          }
+        }
+
+        // Docker info button - shows Docker system info
+        else if (customId === "docker_info") {
+          await interaction.deferUpdate();
+
+          const dockerInfo = await dockerMonitor.getDockerInfo();
+          const embed = embedBuilder.createDockerInfoEmbed(dockerInfo);
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_docker_info")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          const dockerContainers = new ButtonBuilder()
+            .setCustomId("docker_containers")
+            .setLabel("Docker Containers")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            dockerContainers
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
         }
       } catch (error) {
         console.error("Error handling button interaction:", error);
