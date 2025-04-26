@@ -1,5 +1,40 @@
 const Docker = require("dockerode");
-const docker = new Docker();
+let docker;
+
+try {
+  // 嘗試默認連接方式
+  docker = new Docker();
+
+  // 測試連接
+  docker.ping().catch((error) => {
+    console.warn("Docker 連接失敗，可能是權限問題:", error.message);
+    console.warn("請嘗試以下解決方案:");
+    console.warn(
+      "1. 將您的用戶添加到 docker 組: sudo usermod -aG docker $USER"
+    );
+    console.warn("2. 使用 sudo 運行應用程式");
+    console.warn(
+      "3. 臨時更改 docker.sock 權限: sudo chmod 666 /var/run/docker.sock"
+    );
+  });
+} catch (error) {
+  console.error("Docker 初始化失敗:", error);
+  // 創建一個空的 Docker 實例，以確保不會有未定義錯誤
+  docker = {
+    listContainers: () => Promise.resolve([]),
+    getContainer: () => ({
+      inspect: () => Promise.reject(new Error("Docker 未連接")),
+      stats: () => Promise.reject(new Error("Docker 未連接")),
+      start: () => Promise.reject(new Error("Docker 未連接")),
+      stop: () => Promise.reject(new Error("Docker 未連接")),
+      restart: () => Promise.reject(new Error("Docker 未連接")),
+      logs: () => Promise.reject(new Error("Docker 未連接")),
+    }),
+    info: () => Promise.reject(new Error("Docker 未連接")),
+    version: () => Promise.reject(new Error("Docker 未連接")),
+    df: () => Promise.reject(new Error("Docker 未連接")),
+  };
+}
 
 /**
  * Get a list of all containers
