@@ -49,7 +49,10 @@ module.exports = {
       if (subcommand === "run") {
         // 執行單一命令模式
         const command = interaction.options.getString("command");
-        const result = await executeCommand(command);
+
+        // 獲取當前系統目錄
+        const { stdout: currentDir } = await execPromise("pwd");
+        const result = await executeCommand(command, currentDir.trim());
 
         // 建立回應嵌入和按鈕
         const embed = createCommandEmbed(command, result);
@@ -107,7 +110,8 @@ module.exports = {
 
         // 獲取當前目錄並更新嵌入訊息
         const { stdout: currentDir } = await execPromise("pwd");
-        embed.data.fields[0].value = `\`\`\`${currentDir.trim()}\`\`\``;
+        const workingDirectory = currentDir.trim();
+        embed.data.fields[0].value = `\`\`\`${workingDirectory}\`\`\``;
         await interaction.editReply({ embeds: [embed], components: [row] });
 
         // 建立會話並儲存資訊
@@ -116,7 +120,7 @@ module.exports = {
           messageId: reply.id,
           embed: embed,
           commands: [],
-          currentDir: currentDir.trim(),
+          currentDir: workingDirectory,
         });
 
         console.log(`終端會話已為用戶 ${interaction.user.tag} 啟動`);
@@ -149,47 +153,35 @@ module.exports = {
     const command = message.content;
 
     try {
-      // 特殊處理cd命令
-      if (command.trim().startsWith("cd ")) {
-        const dir = command.trim().substring(3);
+      // 執行命令在當前會話目錄
+      const result = await executeCommand(command, session.currentDir);
 
-        try {
-          // 執行cd命令並獲取新的工作目錄
-          const { stdout: newDir } = await execPromise(`cd ${dir} && pwd`);
+      // 如果是cd命令，處理目錄變更
+      if (command.trim().startsWith("cd ") && result.newWorkingDir) {
+        // 更新當前目錄
+        session.currentDir = result.newWorkingDir;
 
-          // 更新當前目錄
-          session.currentDir = newDir.trim();
+        // 更新命令歷史
+        session.commands.push({
+          command,
+          result: `Changed directory to: ${result.newWorkingDir}`,
+        });
 
-          // 更新命令歷史
-          session.commands.push({
-            command,
-            result: `Changed directory to: ${newDir.trim()}`,
-          });
+        // 更新嵌入訊息
+        updateSessionEmbed(session, userId);
 
-          // 更新嵌入訊息
-          updateSessionEmbed(session, userId);
+        // 獲取原始會話訊息並更新
+        const channel = await client.channels.fetch(session.channelId);
+        const sessionMessage = await channel.messages.fetch(session.messageId);
 
-          // 獲取原始會話訊息並更新
-          const channel = await client.channels.fetch(session.channelId);
-          const sessionMessage = await channel.messages.fetch(
-            session.messageId
-          );
+        await sessionMessage.edit({
+          embeds: [session.embed],
+          components: sessionMessage.components,
+        });
 
-          await sessionMessage.edit({
-            embeds: [session.embed],
-            components: sessionMessage.components,
-          });
-
-          await message.reply(`目錄已更改至: ${newDir.trim()}`);
-          return;
-        } catch (error) {
-          await message.reply(`切換目錄失敗: ${error.message}`);
-          return;
-        }
+        await message.reply(`目錄已更改至: ${result.newWorkingDir}`);
+        return;
       }
-
-      // 執行其他命令
-      const result = await executeCommand(command);
 
       // 更新命令歷史
       session.commands.push({ command, result: result.stdout });
@@ -249,8 +241,9 @@ module.exports = {
       const command = Buffer.from(encodedCommand, "base64").toString();
 
       try {
-        // 重新執行命令
-        const result = await executeCommand(command);
+        // 重新執行命令 (使用當前系統目錄)
+        const { stdout: currentDir } = await execPromise("pwd");
+        const result = await executeCommand(command, currentDir.trim());
 
         // 建立新的嵌入訊息
         const embed = createCommandEmbed(command, result);
@@ -305,21 +298,43 @@ module.exports = {
 };
 
 // 執行指令並返回結果
-async function executeCommand(command) {
+async function executeCommand(command, workingDir = null) {
   try {
+    const options = {};
+
+    // If a working directory is specified, use it
+    if (workingDir) {
+      options.cwd = workingDir;
+    }
+
     // Special handling for 'cd' command, since it affects the process state
     if (command.trim().startsWith("cd ")) {
       const dir = command.trim().substring(3);
 
       // Execute the cd command and then check the new directory
-      await execPromise(`cd ${dir} && pwd`);
-
-      // Return success with empty stdout since cd doesn't produce output
-      return { stdout: "", stderr: "" };
+      // When workingDir is provided, change directory relative to it
+      if (workingDir) {
+        const { stdout: newDir } = await execPromise(
+          `cd "${workingDir}" && cd ${dir} && pwd`,
+          options
+        );
+        return {
+          stdout: "",
+          stderr: "",
+          newWorkingDir: newDir.trim(),
+        };
+      } else {
+        const { stdout: newDir } = await execPromise(`cd ${dir} && pwd`);
+        return {
+          stdout: "",
+          stderr: "",
+          newWorkingDir: newDir.trim(),
+        };
+      }
     }
 
     // For all other commands
-    const { stdout, stderr } = await execPromise(command);
+    const { stdout, stderr } = await execPromise(command, options);
     return { stdout, stderr };
   } catch (error) {
     // 如果命令執行失敗，stderr會包含在error對象中
