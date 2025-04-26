@@ -108,22 +108,38 @@ module.exports = {
           components: [row],
         });
 
-        // 獲取當前目錄並更新嵌入訊息
-        const { stdout: currentDir } = await execPromise("pwd");
-        const workingDirectory = currentDir.trim();
-        embed.data.fields[0].value = `\`\`\`${workingDirectory}\`\`\``;
-        await interaction.editReply({ embeds: [embed], components: [row] });
+        try {
+          // 獲取當前目錄並確保它是絕對路徑
+          const { stdout: rawCurrentDir } = await execPromise("pwd", {
+            shell: true,
+          });
+          const workingDirectory = rawCurrentDir.trim();
 
-        // 建立會話並儲存資訊
-        activeSessions.set(userId, {
-          channelId: interaction.channelId,
-          messageId: reply.id,
-          embed: embed,
-          commands: [],
-          currentDir: workingDirectory,
-        });
+          // 確認目錄存在
+          await execPromise(`test -d "${workingDirectory}"`, { shell: true });
 
-        console.log(`終端會話已為用戶 ${interaction.user.tag} 啟動`);
+          // 更新嵌入訊息顯示目錄
+          embed.data.fields[0].value = `\`\`\`${workingDirectory}\`\`\``;
+          await interaction.editReply({ embeds: [embed], components: [row] });
+
+          // 建立會話並儲存資訊
+          activeSessions.set(userId, {
+            channelId: interaction.channelId,
+            messageId: reply.id,
+            embed: embed,
+            commands: [],
+            currentDir: workingDirectory,
+          });
+
+          console.log(
+            `終端會話已為用戶 ${interaction.user.tag} 啟動，目錄: ${workingDirectory}`
+          );
+        } catch (error) {
+          console.error("設置終端會話時發生錯誤:", error);
+          embed.setColor("#FF0000");
+          embed.setDescription("啟動終端會話時發生錯誤: " + error.message);
+          await interaction.editReply({ embeds: [embed], components: [] });
+        }
       }
     } catch (error) {
       console.error("執行終端命令時發生錯誤:", error);
@@ -151,6 +167,32 @@ module.exports = {
 
     // 取得命令文字
     const command = message.content;
+
+    // 特殊命令: debug-dir - 顯示當前的工作目錄
+    if (command.trim() === "debug-dir") {
+      try {
+        await message.reply(`目前的會話目錄: \`${session.currentDir}\``);
+
+        // 驗證目錄是否真的存在
+        const { stdout: dirTest } = await execPromise(
+          `if [ -d "${session.currentDir}" ]; then echo "存在"; else echo "不存在"; fi`,
+          { shell: true }
+        );
+        await message.reply(`該目錄${dirTest.trim()}`);
+
+        // 列出目錄內容
+        const { stdout: dirContents } = await execPromise(
+          `ls -la "${session.currentDir}"`,
+          { shell: true }
+        );
+        await message.reply(`目錄內容:\n\`\`\`\n${dirContents}\n\`\`\``);
+
+        return;
+      } catch (error) {
+        await message.reply(`檢查目錄時發生錯誤: ${error.message}`);
+        return;
+      }
+    }
 
     try {
       // 執行命令在當前會話目錄
@@ -300,43 +342,106 @@ module.exports = {
 // 執行指令並返回結果
 async function executeCommand(command, workingDir = null) {
   try {
-    const options = {};
+    const options = {
+      shell: true, // Use shell for consistent path handling
+    };
 
     // If a working directory is specified, use it
     if (workingDir) {
       options.cwd = workingDir;
+      console.log(`執行命令: "${command}" 在目錄: "${workingDir}"`);
+    } else {
+      console.log(`執行命令: "${command}" 在默認目錄`);
+    }
+
+    // Special case for ls command - always show verbose output
+    if (command.trim() === "ls") {
+      // Make it more obvious by using ls -la
+      command = "ls -la";
+    }
+
+    // Special case for pwd command - always return the current working directory
+    if (command.trim() === "pwd") {
+      try {
+        // First try to get it from options.cwd
+        const actualDir =
+          workingDir || (await execPromise("pwd", options)).stdout.trim();
+        console.log(`pwd命令返回: "${actualDir}"`);
+        return {
+          stdout: actualDir,
+          stderr: "",
+        };
+      } catch (error) {
+        console.error("pwd命令錯誤:", error);
+        return {
+          stdout: "無法獲取當前目錄",
+          stderr: error.message,
+        };
+      }
     }
 
     // Special handling for 'cd' command, since it affects the process state
     if (command.trim().startsWith("cd ")) {
       const dir = command.trim().substring(3);
+      console.log(`處理cd命令: "${dir}" 從目錄: "${workingDir}"`);
 
-      // Execute the cd command and then check the new directory
-      // When workingDir is provided, change directory relative to it
-      if (workingDir) {
-        const { stdout: newDir } = await execPromise(
-          `cd "${workingDir}" && cd ${dir} && pwd`,
-          options
-        );
+      try {
+        // Calculate the new directory path
+        let newDir;
+
+        if (dir.startsWith("/")) {
+          // Absolute path
+          newDir = dir;
+          console.log(`使用絕對路徑: "${newDir}"`);
+        } else if (dir === "~") {
+          // Home directory
+          newDir = (
+            await execPromise("echo $HOME", { shell: true })
+          ).stdout.trim();
+          console.log(`使用家目錄: "${newDir}"`);
+        } else if (workingDir) {
+          // Relative path with working dir
+          // Use path.resolve in shell to handle .. and . properly
+          const { stdout } = await execPromise(
+            `cd "${workingDir}" && cd "${dir}" && pwd`,
+            { shell: true }
+          );
+          newDir = stdout.trim();
+          console.log(
+            `解析相對路徑: "${dir}" 從 "${workingDir}" 得到 "${newDir}"`
+          );
+        } else {
+          // Relative path without working dir
+          const { stdout } = await execPromise(`cd "${dir}" && pwd`, {
+            shell: true,
+          });
+          newDir = stdout.trim();
+          console.log(`解析相對路徑: "${dir}" 從默認目錄得到 "${newDir}"`);
+        }
+
+        // Verify the directory exists and is accessible
+        await execPromise(`test -d "${newDir}"`, { shell: true });
+        console.log(`確認目錄存在: "${newDir}"`);
+
         return {
           stdout: "",
           stderr: "",
-          newWorkingDir: newDir.trim(),
+          newWorkingDir: newDir,
         };
-      } else {
-        const { stdout: newDir } = await execPromise(`cd ${dir} && pwd`);
+      } catch (error) {
+        console.error(`cd命令錯誤:`, error);
         return {
           stdout: "",
-          stderr: "",
-          newWorkingDir: newDir.trim(),
+          stderr: `cd: ${dir}: No such file or directory`,
         };
       }
     }
 
-    // For all other commands
+    // For all other commands, execute in the specified directory
     const { stdout, stderr } = await execPromise(command, options);
     return { stdout, stderr };
   } catch (error) {
+    console.error(`執行命令錯誤: "${command}"`, error);
     // 如果命令執行失敗，stderr會包含在error對象中
     return {
       stdout: error.stdout || "",
