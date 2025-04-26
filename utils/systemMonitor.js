@@ -1,4 +1,56 @@
 const si = require("systeminformation");
+const { exec } = require("child_process");
+const util = require("util");
+const execPromise = util.promisify(exec);
+
+/**
+ * Get uptime information using system command
+ * @returns {Promise<Object>} Uptime information
+ */
+async function getUptimeInfo() {
+  try {
+    // 使用系統的uptime命令獲取運行時間
+    const { stdout } = await execPromise("uptime");
+
+    // 解析uptime輸出
+    // 典型輸出格式: 18:09:18 up 3 days, 4:31, 16 users, load average: 0.12, 0.04, 0.01
+    const uptimeMatch = stdout.match(
+      /up\s+(?:(\d+)\s+days?,\s+)?(?:(\d+):)?(\d+)/
+    );
+
+    if (uptimeMatch) {
+      const days = uptimeMatch[1] ? parseInt(uptimeMatch[1]) : 0;
+      const hours = uptimeMatch[2] ? parseInt(uptimeMatch[2]) : 0;
+      const minutes = parseInt(uptimeMatch[3]);
+
+      return {
+        days,
+        hours,
+        minutes,
+        raw: stdout.trim(),
+      };
+    } else {
+      // 如果無法解析，則使用systeminformation的結果作為後備
+      const os = await si.osInfo();
+      return {
+        days: Math.floor(os.uptime / 86400),
+        hours: Math.floor((os.uptime % 86400) / 3600),
+        minutes: Math.floor((os.uptime % 3600) / 60),
+        raw: `Fallback: ${os.uptime} seconds`,
+      };
+    }
+  } catch (error) {
+    console.error("Error getting uptime:", error);
+    // 錯誤時使用systeminformation的結果作為後備
+    const os = await si.osInfo();
+    return {
+      days: Math.floor(os.uptime / 86400),
+      hours: Math.floor((os.uptime % 86400) / 3600),
+      minutes: Math.floor((os.uptime % 3600) / 60),
+      raw: `Error: ${error.message}, using fallback`,
+    };
+  }
+}
 
 /**
  * Get basic system information
@@ -6,14 +58,16 @@ const si = require("systeminformation");
  */
 async function getSystemInfo() {
   try {
-    const [cpu, mem, os, time, fsSize, currentLoad] = await Promise.all([
-      si.cpu(),
-      si.mem(),
-      si.osInfo(),
-      si.time(),
-      si.fsSize(),
-      si.currentLoad(),
-    ]);
+    const [cpu, mem, os, time, fsSize, currentLoad, uptimeInfo] =
+      await Promise.all([
+        si.cpu(),
+        si.mem(),
+        si.osInfo(),
+        si.time(),
+        si.fsSize(),
+        si.currentLoad(),
+        getUptimeInfo(),
+      ]);
 
     const memoryInfo = {
       total: (mem.total / 1073741824).toFixed(2),
@@ -31,12 +85,6 @@ async function getSystemInfo() {
       usedPercentage: disk.use.toFixed(2),
     }));
 
-    const uptime = {
-      days: Math.floor(os.uptime / 86400),
-      hours: Math.floor((os.uptime % 86400) / 3600),
-      minutes: Math.floor((os.uptime % 3600) / 60),
-    };
-
     return {
       cpu: {
         manufacturer: cpu.manufacturer,
@@ -53,7 +101,7 @@ async function getSystemInfo() {
         kernel: os.kernel,
         arch: os.arch,
       },
-      uptime: uptime,
+      uptime: uptimeInfo,
       disks: diskInfo,
       time: time,
     };

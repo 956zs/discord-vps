@@ -48,6 +48,17 @@ module.exports = {
       try {
         const customId = interaction.customId;
 
+        // 檢查命令是否有自己的處理互動方法
+        if (
+          customId.startsWith("rerun_") ||
+          customId.startsWith("end_session_")
+        ) {
+          const terminalCommand = client.commands.get("terminal");
+          if (terminalCommand && terminalCommand.handleInteraction) {
+            return await terminalCommand.handleInteraction(interaction);
+          }
+        }
+
         // System info refresh button
         if (customId === "refresh_system_info") {
           await interaction.deferUpdate();
