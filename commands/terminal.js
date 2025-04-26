@@ -149,17 +149,50 @@ module.exports = {
     const command = message.content;
 
     try {
-      // 執行命令
+      // 特殊處理cd命令
+      if (command.trim().startsWith("cd ")) {
+        const dir = command.trim().substring(3);
+
+        try {
+          // 執行cd命令並獲取新的工作目錄
+          const { stdout: newDir } = await execPromise(`cd ${dir} && pwd`);
+
+          // 更新當前目錄
+          session.currentDir = newDir.trim();
+
+          // 更新命令歷史
+          session.commands.push({
+            command,
+            result: `Changed directory to: ${newDir.trim()}`,
+          });
+
+          // 更新嵌入訊息
+          updateSessionEmbed(session, userId);
+
+          // 獲取原始會話訊息並更新
+          const channel = await client.channels.fetch(session.channelId);
+          const sessionMessage = await channel.messages.fetch(
+            session.messageId
+          );
+
+          await sessionMessage.edit({
+            embeds: [session.embed],
+            components: sessionMessage.components,
+          });
+
+          await message.reply(`目錄已更改至: ${newDir.trim()}`);
+          return;
+        } catch (error) {
+          await message.reply(`切換目錄失敗: ${error.message}`);
+          return;
+        }
+      }
+
+      // 執行其他命令
       const result = await executeCommand(command);
 
       // 更新命令歷史
       session.commands.push({ command, result: result.stdout });
-
-      // 如果命令是cd，更新當前目錄
-      if (command.trim().startsWith("cd ")) {
-        const { stdout: newDir } = await execPromise("pwd");
-        session.currentDir = newDir.trim();
-      }
 
       // 更新嵌入訊息
       updateSessionEmbed(session, userId);
@@ -274,6 +307,18 @@ module.exports = {
 // 執行指令並返回結果
 async function executeCommand(command) {
   try {
+    // Special handling for 'cd' command, since it affects the process state
+    if (command.trim().startsWith("cd ")) {
+      const dir = command.trim().substring(3);
+
+      // Execute the cd command and then check the new directory
+      await execPromise(`cd ${dir} && pwd`);
+
+      // Return success with empty stdout since cd doesn't produce output
+      return { stdout: "", stderr: "" };
+    }
+
+    // For all other commands
     const { stdout, stderr } = await execPromise(command);
     return { stdout, stderr };
   } catch (error) {
