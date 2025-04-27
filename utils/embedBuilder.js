@@ -482,6 +482,297 @@ function createImagePullEmbed(pullResult) {
   return embed;
 }
 
+/**
+ * Create an embed for Docker Compose projects list
+ * @param {Array} projects - List of Compose projects
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createComposeProjectsListEmbed(projects) {
+  const embed = new EmbedBuilder()
+    .setColor("#2496ED") // Docker blue
+    .setTitle("Docker Compose Projects")
+    .setDescription(`共發現 ${projects.length} 個 Compose 專案`)
+    .setTimestamp();
+
+  if (projects.length === 0) {
+    embed.setDescription("未找到 Docker Compose 專案。");
+    return embed;
+  }
+
+  let projectsList = "";
+  projects.forEach((project, index) => {
+    projectsList += `**${index + 1}.** \`${project.name}\`\n`;
+    projectsList += `   💡 狀態: ${project.status}\n`;
+    if (project.configFiles && project.configFiles.length > 0) {
+      projectsList += `   📁 配置檔案: ${project.configFiles.join(", ")}\n`;
+    }
+    if (project.workingDir) {
+      projectsList += `   📂 工作目錄: ${project.workingDir}\n`;
+    }
+    projectsList += "\n";
+  });
+
+  embed.setDescription(projectsList || "無專案資訊可用");
+  return embed;
+}
+
+/**
+ * Create an embed for Docker Compose project details
+ * @param {Object} project - Project details from dockerMonitor.js
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createComposeProjectDetailsEmbed(project) {
+  const embed = new EmbedBuilder()
+    .setColor("#2496ED") // Docker blue
+    .setTitle(`Compose 專案: ${project.name}`)
+    .setTimestamp();
+
+  // 添加專案概述
+  let overview = "";
+  if (project.file) {
+    overview += `📁 配置檔案: \`${project.file}\`\n`;
+  }
+  if (project.workingDir) {
+    overview += `📂 工作目錄: \`${project.workingDir}\`\n`;
+  }
+
+  if (project.networks && project.networks.length > 0) {
+    overview += `🔄 網路: ${project.networks
+      .map((n) => `\`${n}\``)
+      .join(", ")}\n`;
+  }
+
+  if (project.volumes && project.volumes.length > 0) {
+    overview += `💾 存儲卷: ${project.volumes
+      .map((v) => `\`${v}\``)
+      .join(", ")}\n`;
+  }
+
+  embed.setDescription(overview);
+
+  // 添加服務資訊
+  if (project.services && project.services.length > 0) {
+    // 按狀態分組
+    const running = project.services.filter((s) => s.status === "running");
+    const stopped = project.services.filter(
+      (s) => s.status === "exited" || s.status === "stopped"
+    );
+    const others = project.services.filter(
+      (s) =>
+        s.status !== "running" &&
+        s.status !== "exited" &&
+        s.status !== "stopped"
+    );
+
+    // 運行中的服務
+    if (running.length > 0) {
+      let runningList = "";
+      running.forEach((service, i) => {
+        runningList += `**${i + 1}.** \`${service.name}\`\n`;
+        runningList += `   📦 映像: ${service.image}\n`;
+        if (service.health && service.health !== "N/A") {
+          runningList += `   ❤️ 健康狀態: ${service.health}\n`;
+        }
+        if (service.ports && service.ports.length > 0) {
+          runningList += `   🔌 端口: ${service.ports
+            .map((p) =>
+              typeof p === "string" ? p : `${p.published}:${p.target}`
+            )
+            .join(", ")}\n`;
+        }
+        if (service.depends_on && service.depends_on.length > 0) {
+          runningList += `   🔗 依賴: ${
+            Array.isArray(service.depends_on)
+              ? service.depends_on.join(", ")
+              : Object.keys(service.depends_on).join(", ")
+          }\n`;
+        }
+        runningList += "\n";
+      });
+
+      embed.addFields({
+        name: "✅ 運行中的服務",
+        value: runningList,
+        inline: false,
+      });
+    }
+
+    // 已停止的服務
+    if (stopped.length > 0) {
+      let stoppedList = "";
+      stopped.forEach((service, i) => {
+        stoppedList += `**${i + 1}.** \`${service.name}\`\n`;
+        stoppedList += `   📦 映像: ${service.image}\n`;
+        stoppedList += `   🔄 狀態: ${service.status}\n`;
+        stoppedList += "\n";
+      });
+
+      embed.addFields({
+        name: "⛔ 已停止的服務",
+        value: stoppedList,
+        inline: false,
+      });
+    }
+
+    // 其他狀態的服務
+    if (others.length > 0) {
+      let othersList = "";
+      others.forEach((service, i) => {
+        othersList += `**${i + 1}.** \`${service.name}\` (${service.status})\n`;
+        othersList += `   📦 映像: ${service.image}\n`;
+        othersList += "\n";
+      });
+
+      embed.addFields({
+        name: "⚠️ 其他服務",
+        value: othersList,
+        inline: false,
+      });
+    }
+  } else {
+    embed.addFields({
+      name: "服務",
+      value: "此專案沒有定義服務。",
+      inline: false,
+    });
+  }
+
+  return embed;
+}
+
+/**
+ * Create an embed for Docker Compose operation result
+ * @param {Object} result - Operation result
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createComposeOperationResultEmbed(result) {
+  const embed = new EmbedBuilder()
+    .setColor(result.success ? "#2496ED" : "#FF0000") // Docker blue or red for error
+    .setTitle(
+      `Docker Compose ${result.action || "Operation"}: ${result.project}`
+    )
+    .setTimestamp();
+
+  if (result.success) {
+    embed.setDescription(
+      `✅ 成功執行 \`${result.action || "operation"}\` 操作於專案 \`${
+        result.project
+      }\``
+    );
+
+    // 如果有輸出，顯示部分輸出（限制長度）
+    if (result.output) {
+      const limitedOutput =
+        result.output.length > 1000
+          ? result.output.substring(0, 997) + "..."
+          : result.output;
+
+      embed.addFields({
+        name: "輸出日誌",
+        value: "```\n" + limitedOutput + "\n```",
+        inline: false,
+      });
+    }
+  } else {
+    embed.setDescription(
+      `❌ 執行 \`${result.action || "operation"}\` 操作於專案 \`${
+        result.project
+      }\` 時出錯`
+    );
+
+    // 添加錯誤詳情
+    if (result.error) {
+      const limitedError =
+        result.error.length > 1000
+          ? result.error.substring(0, 997) + "..."
+          : result.error;
+
+      embed.addFields({
+        name: "錯誤詳情",
+        value: "```\n" + limitedError + "\n```",
+        inline: false,
+      });
+    }
+  }
+
+  return embed;
+}
+
+/**
+ * Create an embed for Docker Compose pull result
+ * @param {Object} pullResult - Result from pullComposeImages function
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createComposePullResultEmbed(pullResult) {
+  const embed = new EmbedBuilder()
+    .setColor(pullResult.success ? "#2496ED" : "#FF0000") // Docker blue or red for error
+    .setTitle(`Docker Compose Pull: ${pullResult.project}`)
+    .setTimestamp();
+
+  if (pullResult.success) {
+    embed.setDescription(
+      `✅ 成功拉取 Docker Compose 專案 \`${pullResult.project}\` 的映像`
+    );
+
+    // 如果有輸出，顯示部分輸出（限制長度）
+    if (pullResult.output) {
+      // 嘗試從輸出中提取哪些映像被拉取或更新
+      const images = pullResult.output.match(/Pulling ([^\s]+)/g) || [];
+      const pulledImages = [
+        ...new Set(images.map((img) => img.replace("Pulling ", ""))),
+      ];
+
+      if (pulledImages.length > 0) {
+        embed.addFields({
+          name: "已拉取的映像",
+          value: pulledImages.map((img) => `• \`${img}\``).join("\n"),
+          inline: false,
+        });
+      }
+
+      const limitedOutput =
+        pullResult.output.length > 800
+          ? pullResult.output.substring(0, 797) + "..."
+          : pullResult.output;
+
+      embed.addFields({
+        name: "輸出日誌",
+        value: "```\n" + limitedOutput + "\n```",
+        inline: false,
+      });
+    }
+
+    // 添加更新提示
+    embed.addFields({
+      name: "更新容器",
+      value:
+        "要讓容器使用新拉取的映像，你需要重啟或重建容器。\n" +
+        "請使用 `/docker compose control` 命令並選擇 `restart` 或 `up` 操作。",
+      inline: false,
+    });
+  } else {
+    embed.setDescription(
+      `❌ 拉取 Docker Compose 專案 \`${pullResult.project}\` 的映像時出錯`
+    );
+
+    // 添加錯誤詳情
+    if (pullResult.error) {
+      const limitedError =
+        pullResult.error.length > 1000
+          ? pullResult.error.substring(0, 997) + "..."
+          : pullResult.error;
+
+      embed.addFields({
+        name: "錯誤詳情",
+        value: "```\n" + limitedError + "\n```",
+        inline: false,
+      });
+    }
+  }
+
+  return embed;
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -492,4 +783,9 @@ module.exports = {
   createContainerLogsEmbed,
   createImageListEmbed,
   createImagePullEmbed,
+  // Docker Compose 相關
+  createComposeProjectsListEmbed,
+  createComposeProjectDetailsEmbed,
+  createComposeOperationResultEmbed,
+  createComposePullResultEmbed,
 };

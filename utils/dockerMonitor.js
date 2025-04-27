@@ -420,6 +420,317 @@ async function listImages() {
   }
 }
 
+/**
+ * List Docker Compose projects
+ * @returns {Promise<Array>} List of Docker Compose projects
+ */
+async function listComposeProjects() {
+  try {
+    // 使用 docker compose ls 命令獲取所有 compose 項目
+    const { stdout } = await require("child_process").promisify(
+      require("child_process").exec
+    )("docker compose ls --format json");
+
+    // 解析JSON輸出
+    let projects = [];
+    try {
+      projects = JSON.parse(stdout);
+    } catch (e) {
+      // 如果JSON解析失敗，嘗試逐行解析
+      projects = stdout
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter((item) => item !== null);
+    }
+
+    return projects.map((project) => ({
+      name: project.Name,
+      status: project.Status || "unknown",
+      configFiles: project.ConfigFiles || [],
+      workingDir: project.WorkingDir || "",
+    }));
+  } catch (error) {
+    console.error("Error listing Docker Compose projects:", error);
+    throw error;
+  }
+}
+
+/**
+ * Get details of a Docker Compose project
+ * @param {string} projectName - Name of the Docker Compose project or directory path
+ * @returns {Promise<Object>} Project details with services info
+ */
+async function getComposeProjectDetails(projectName) {
+  try {
+    // 檢查是否為路徑
+    const isPath = projectName.includes("/");
+
+    // 設置工作目錄參數
+    const workingDirArg = isPath
+      ? `-f "${projectName}"`
+      : `--project-name ${projectName}`;
+
+    // 獲取項目配置
+    const { stdout: configOutput } = await require("child_process").promisify(
+      require("child_process").exec
+    )(`docker compose ${workingDirArg} config --format json`);
+
+    // 解析配置
+    let config = {};
+    try {
+      config = JSON.parse(configOutput);
+    } catch (e) {
+      throw new Error(`無法解析 Docker Compose 配置: ${e.message}`);
+    }
+
+    // 獲取服務狀態
+    const { stdout: psOutput } = await require("child_process").promisify(
+      require("child_process").exec
+    )(`docker compose ${workingDirArg} ps --format json`);
+
+    // 解析服務狀態
+    let services = [];
+    try {
+      services = JSON.parse(psOutput);
+      // 處理可能的單行 JSON 輸出
+      if (!Array.isArray(services)) {
+        services = [services];
+      }
+    } catch (e) {
+      // 嘗試逐行解析
+      services = psOutput
+        .split("\n")
+        .filter((line) => line.trim())
+        .map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch (e) {
+            return null;
+          }
+        })
+        .filter((item) => item !== null);
+    }
+
+    // 將配置和狀態整合
+    const projectServices = Object.keys(config.services || {}).map(
+      (serviceName) => {
+        const serviceConfig = config.services[serviceName];
+        const serviceStatus = services.find(
+          (s) => s.Service === serviceName || s.Name?.includes(serviceName)
+        );
+
+        return {
+          name: serviceName,
+          image: serviceConfig.image || "custom build",
+          status: serviceStatus ? serviceStatus.State : "not created",
+          health: serviceStatus ? serviceStatus.Health || "N/A" : "N/A",
+          ports: serviceConfig.ports || [],
+          depends_on: serviceConfig.depends_on || [],
+        };
+      }
+    );
+
+    return {
+      name: isPath ? projectName : config.name || projectName,
+      workingDir: isPath
+        ? require("path").dirname(projectName)
+        : config.workingDir || "",
+      file: isPath
+        ? require("path").basename(projectName)
+        : "docker-compose.yml",
+      services: projectServices,
+      networks: Object.keys(config.networks || {}),
+      volumes: Object.keys(config.volumes || {}),
+    };
+  } catch (error) {
+    console.error(
+      `Error getting Docker Compose project details for ${projectName}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+/**
+ * Pull images for a Docker Compose project
+ * @param {string} projectNameOrPath - Project name or path to docker-compose.yml
+ * @returns {Promise<Object>} Result of the pull operation
+ */
+async function pullComposeImages(projectNameOrPath) {
+  try {
+    // 檢查是否為路徑
+    const isPath = projectNameOrPath.includes("/");
+
+    // 設置工作目錄參數
+    const workingDirArg = isPath
+      ? `-f "${projectNameOrPath}"`
+      : `--project-name ${projectNameOrPath}`;
+
+    // 執行 pull 命令
+    const childProcess = require("child_process").spawn(
+      "docker",
+      ["compose", ...workingDirArg.split(" "), "pull"],
+      {
+        shell: true,
+      }
+    );
+
+    // 收集輸出
+    let output = "";
+    let errors = "";
+
+    childProcess.stdout.on("data", (data) => {
+      const chunk = data.toString();
+      output += chunk;
+      console.log(`[Compose Pull] ${chunk.trim()}`);
+    });
+
+    childProcess.stderr.on("data", (data) => {
+      const chunk = data.toString();
+      errors += chunk;
+      console.error(`[Compose Pull Error] ${chunk.trim()}`);
+    });
+
+    // 返回結果
+    return new Promise((resolve, reject) => {
+      childProcess.on("close", (code) => {
+        if (code === 0) {
+          resolve({
+            success: true,
+            project: projectNameOrPath,
+            output: output.trim(),
+          });
+        } else {
+          resolve({
+            success: false,
+            project: projectNameOrPath,
+            error: errors.trim() || `Process exited with code ${code}`,
+          });
+        }
+      });
+
+      childProcess.on("error", (err) => {
+        reject(err);
+      });
+    });
+  } catch (error) {
+    console.error(
+      `Error pulling Docker Compose images for ${projectNameOrPath}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+/**
+ * Control a Docker Compose project (up, down, restart)
+ * @param {string} projectNameOrPath - Project name or path to docker-compose.yml
+ * @param {string} action - Action to perform (up, down, restart)
+ * @param {boolean} detached - Run in detached mode (for up)
+ * @returns {Promise<Object>} Result of the operation
+ */
+async function controlComposeProject(
+  projectNameOrPath,
+  action,
+  detached = true
+) {
+  try {
+    // 檢查是否為路徑
+    const isPath = projectNameOrPath.includes("/");
+
+    // 設置工作目錄參數
+    const workingDirArg = isPath
+      ? `-f "${projectNameOrPath}"`
+      : `--project-name ${projectNameOrPath}`;
+
+    // 設置命令選項
+    let command = ["compose"];
+    command = command.concat(workingDirArg.split(" "));
+
+    switch (action.toLowerCase()) {
+      case "up":
+        command.push("up");
+        if (detached) {
+          command.push("-d");
+        }
+        break;
+      case "down":
+        command.push("down");
+        break;
+      case "restart":
+        command.push("restart");
+        break;
+      case "stop":
+        command.push("stop");
+        break;
+      case "start":
+        command.push("start");
+        break;
+      default:
+        throw new Error(`無效的操作: ${action}`);
+    }
+
+    // 執行命令
+    const childProcess = require("child_process").spawn("docker", command, {
+      shell: true,
+    });
+
+    // 收集輸出
+    let output = "";
+    let errors = "";
+
+    childProcess.stdout.on("data", (data) => {
+      const chunk = data.toString();
+      output += chunk;
+      console.log(`[Compose ${action}] ${chunk.trim()}`);
+    });
+
+    childProcess.stderr.on("data", (data) => {
+      const chunk = data.toString();
+      errors += chunk;
+      console.error(`[Compose ${action} Error] ${chunk.trim()}`);
+    });
+
+    // 返回結果
+    return new Promise((resolve, reject) => {
+      childProcess.on("close", (code) => {
+        if (code === 0) {
+          resolve({
+            success: true,
+            project: projectNameOrPath,
+            action: action,
+            output: output.trim(),
+          });
+        } else {
+          resolve({
+            success: false,
+            project: projectNameOrPath,
+            action: action,
+            error: errors.trim() || `Process exited with code ${code}`,
+          });
+        }
+      });
+
+      childProcess.on("error", (err) => {
+        reject(err);
+      });
+    });
+  } catch (error) {
+    console.error(
+      `Error controlling Docker Compose project ${projectNameOrPath} with action ${action}:`,
+      error
+    );
+    throw error;
+  }
+}
+
 module.exports = {
   listContainers,
   getContainerInfo,
@@ -428,4 +739,9 @@ module.exports = {
   getContainerLogs,
   pullImage,
   listImages,
+  // Docker Compose 功能
+  listComposeProjects,
+  getComposeProjectDetails,
+  pullComposeImages,
+  controlComposeProject,
 };

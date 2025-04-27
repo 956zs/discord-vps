@@ -124,6 +124,64 @@ module.exports = {
             .setName("image")
             .setDescription("Image name and tag (e.g. ubuntu:latest)")
             .setRequired(true)
+            .setAutocomplete(true)
+        )
+    )
+    .addSubcommandGroup((group) =>
+      group
+        .setName("compose")
+        .setDescription("Docker Compose 多容器管理")
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("list")
+            .setDescription("列出所有 Docker Compose 專案")
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("details")
+            .setDescription("查看 Docker Compose 專案詳情")
+            .addStringOption((option) =>
+              option
+                .setName("project")
+                .setDescription("專案名稱或 docker-compose.yml 文件路徑")
+                .setRequired(true)
+                .setAutocomplete(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("pull")
+            .setDescription("拉取 Docker Compose 專案的所有映像")
+            .addStringOption((option) =>
+              option
+                .setName("project")
+                .setDescription("專案名稱或 docker-compose.yml 文件路徑")
+                .setRequired(true)
+                .setAutocomplete(true)
+            )
+        )
+        .addSubcommand((subcommand) =>
+          subcommand
+            .setName("control")
+            .setDescription("控制 Docker Compose 專案 (啟動、停止、重啟)")
+            .addStringOption((option) =>
+              option
+                .setName("project")
+                .setDescription("專案名稱或 docker-compose.yml 文件路徑")
+                .setRequired(true)
+                .setAutocomplete(true)
+            )
+            .addStringOption((option) =>
+              option
+                .setName("action")
+                .setDescription("要執行的操作")
+                .setRequired(true)
+                .addChoices(
+                  { name: "啟動 (up)", value: "up" },
+                  { name: "停止 (down)", value: "down" },
+                  { name: "重啟 (restart)", value: "restart" }
+                )
+            )
         )
     ),
 
@@ -131,9 +189,194 @@ module.exports = {
     await interaction.deferReply();
 
     const subcommand = interaction.options.getSubcommand();
+    const group = interaction.options.getSubcommandGroup(false);
 
     try {
-      if (subcommand === "info") {
+      if (group === "compose") {
+        if (subcommand === "list") {
+          const projects = await dockerMonitor.listComposeProjects();
+          const embed = embedBuilder.createComposeProjectsListEmbed(projects);
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_compose_projects")
+            .setLabel("刷新")
+            .setStyle(ButtonStyle.Primary);
+
+          const row = new ActionRowBuilder().addComponents(refreshButton);
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        } else if (subcommand === "details") {
+          const projectName = interaction.options.getString("project");
+
+          try {
+            const projectDetails = await dockerMonitor.getComposeProjectDetails(
+              projectName
+            );
+            const embed =
+              embedBuilder.createComposeProjectDetailsEmbed(projectDetails);
+
+            const upButton = new ButtonBuilder()
+              .setCustomId(`compose_up_${encodeURIComponent(projectName)}`)
+              .setLabel("啟動")
+              .setStyle(ButtonStyle.Success);
+
+            const downButton = new ButtonBuilder()
+              .setCustomId(`compose_down_${encodeURIComponent(projectName)}`)
+              .setLabel("停止")
+              .setStyle(ButtonStyle.Danger);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`compose_restart_${encodeURIComponent(projectName)}`)
+              .setLabel("重啟")
+              .setStyle(ButtonStyle.Primary);
+
+            const pullButton = new ButtonBuilder()
+              .setCustomId(`compose_pull_${encodeURIComponent(projectName)}`)
+              .setLabel("拉取映像")
+              .setStyle(ButtonStyle.Secondary);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("刷新")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(
+              upButton,
+              downButton,
+              restartButton,
+              pullButton,
+              refreshButton
+            );
+
+            await interaction.editReply({ embeds: [embed], components: [row] });
+          } catch (error) {
+            console.error(
+              `Error getting compose details for ${projectName}:`,
+              error
+            );
+            await interaction.editReply({
+              content: `獲取 Docker Compose 專案詳情時出錯: ${error.message}`,
+              components: [],
+            });
+          }
+        } else if (subcommand === "pull") {
+          const projectName = interaction.options.getString("project");
+
+          await interaction.editReply({
+            content: `🔄 正在拉取 Docker Compose 專案 \`${projectName}\` 的映像... 這可能需要一些時間，取決於映像大小。`,
+            components: [],
+          });
+
+          try {
+            const pullResult = await dockerMonitor.pullComposeImages(
+              projectName
+            );
+
+            const embed = embedBuilder.createComposePullResultEmbed(pullResult);
+
+            const detailsButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("查看專案詳情")
+              .setStyle(ButtonStyle.Primary);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`compose_restart_${encodeURIComponent(projectName)}`)
+              .setLabel("重啟容器")
+              .setStyle(ButtonStyle.Success);
+
+            const row = new ActionRowBuilder().addComponents(
+              detailsButton,
+              restartButton
+            );
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(`Error pulling images for ${projectName}:`, error);
+
+            const embed = new EmbedBuilder()
+              .setColor("#FF0000")
+              .setTitle(`Docker Compose Pull 失敗: ${projectName}`)
+              .setDescription(
+                `❌ 拉取 Docker Compose 專案 \`${projectName}\` 的映像時出錯`
+              )
+              .addFields({
+                name: "錯誤",
+                value: error.message || "未知錯誤",
+              })
+              .setTimestamp();
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [],
+            });
+          }
+        } else if (subcommand === "control") {
+          const projectName = interaction.options.getString("project");
+          const action = interaction.options.getString("action");
+
+          await interaction.editReply({
+            content: `🔄 正在對 Docker Compose 專案 \`${projectName}\` 執行 \`${action}\` 操作... 請稍候。`,
+            components: [],
+          });
+
+          try {
+            const result = await dockerMonitor.controlComposeProject(
+              projectName,
+              action
+            );
+
+            const embed =
+              embedBuilder.createComposeOperationResultEmbed(result);
+
+            const detailsButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("查看專案詳情")
+              .setStyle(ButtonStyle.Primary);
+
+            const row = new ActionRowBuilder().addComponents(detailsButton);
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(
+              `Error controlling project ${projectName} with action ${action}:`,
+              error
+            );
+
+            const embed = new EmbedBuilder()
+              .setColor("#FF0000")
+              .setTitle(`Docker Compose ${action} 失敗: ${projectName}`)
+              .setDescription(
+                `❌ 對 Docker Compose 專案 \`${projectName}\` 執行 \`${action}\` 操作時出錯`
+              )
+              .addFields({
+                name: "錯誤",
+                value: error.message || "未知錯誤",
+              })
+              .setTimestamp();
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [],
+            });
+          }
+        }
+      } else if (subcommand === "info") {
         const dockerInfo = await dockerMonitor.getDockerInfo();
         const embed = embedBuilder.createDockerInfoEmbed(dockerInfo);
 
@@ -295,13 +538,61 @@ module.exports = {
           // Create an embed with the result
           const embed = embedBuilder.createImagePullEmbed(pullResult);
 
-          // Create refresh buttons
+          // 檢查是否有容器正在使用此映像
+          const allContainers = await dockerMonitor.listContainers(true);
+          const imageContainers = allContainers.filter(
+            (container) =>
+              container.image === imageName ||
+              container.image.startsWith(`${imageName}@sha256:`)
+          );
+
+          if (imageContainers.length > 0) {
+            // 添加使用此映像的容器資訊到嵌入訊息中
+            embed.addFields({
+              name: "相關容器",
+              value: `找到 ${imageContainers.length} 個使用此映像的容器。您可能需要重啟這些容器以使用新映像。`,
+              inline: false,
+            });
+
+            // 如果容器數量不多，列出容器名稱
+            if (imageContainers.length <= 5) {
+              const containerList = imageContainers
+                .map((c) => `• \`${c.names[0] || c.id}\` (${c.state})`)
+                .join("\n");
+
+              embed.addFields({
+                name: "容器列表",
+                value: containerList,
+                inline: false,
+              });
+            }
+
+            embed.addFields({
+              name: "更新步驟",
+              value:
+                "要更新這些容器使用的映像，請遵循以下步驟：\n1. 使用 `/docker control` 停止容器\n2. 刪除舊容器 (未來功能)\n3. 使用新映像創建新容器 (未來功能)",
+              inline: false,
+            });
+          }
+
+          // Create buttons
           const viewImagesButton = new ButtonBuilder()
             .setCustomId("docker_images")
             .setLabel("View All Images")
             .setStyle(ButtonStyle.Primary);
 
-          const row = new ActionRowBuilder().addComponents(viewImagesButton);
+          const relatedContainersButton = new ButtonBuilder()
+            .setCustomId(
+              `find_image_containers_${encodeURIComponent(imageName)}`
+            )
+            .setLabel("Find Related Containers")
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(imageContainers.length === 0); // 如果沒有相關容器則禁用按鈕
+
+          const row = new ActionRowBuilder().addComponents(
+            viewImagesButton,
+            relatedContainersButton
+          );
 
           // Update reply with the result
           await interaction.editReply({
@@ -351,6 +642,7 @@ module.exports = {
   // 7. 用戶選擇後，選擇的值會被傳遞給execute函數的對應選項
   async autocomplete(interaction) {
     const focusedOption = interaction.options.getFocused(true);
+    const group = interaction.options.getSubcommandGroup(false);
 
     if (focusedOption.name === "container") {
       try {
@@ -376,6 +668,114 @@ module.exports = {
       } catch (error) {
         console.error("Error in docker autocomplete:", error);
         await interaction.respond([]);
+      }
+    } else if (focusedOption.name === "image") {
+      try {
+        // 取得所有本地映像
+        const images = await dockerMonitor.listImages();
+
+        // 根據使用者輸入過濾映像
+        const search = focusedOption.value.toLowerCase();
+        const filtered = images.filter((image) => {
+          // 搜尋映像的標籤中是否含有使用者輸入的文字
+          return image.repoTags.some((tag) =>
+            tag.toLowerCase().includes(search)
+          );
+        });
+
+        // 建立選單選項
+        const choices = [];
+
+        // 先加入符合搜尋的本地映像
+        filtered.forEach((image) => {
+          // 一個映像可能有多個標籤，我們為每個標籤提供選項
+          image.repoTags.forEach((tag) => {
+            if (tag !== "<none>:<none>" && tag.toLowerCase().includes(search)) {
+              choices.push({
+                name: `${tag} (local)`,
+                value: tag,
+              });
+            }
+          });
+        });
+
+        // 如果使用者輸入了有效的映像名稱格式，但不在本地映像中，也提供建議
+        if (search.includes(":") || !search.includes(" ")) {
+          // 檢查是否已經在建議列表中
+          const exists = choices.some(
+            (choice) => choice.value.toLowerCase() === search
+          );
+
+          if (!exists && search.length > 0) {
+            choices.push({
+              name: `${focusedOption.value} (pull from registry)`,
+              value: focusedOption.value,
+            });
+          }
+        }
+
+        // 回傳建議選項，最多25個
+        await interaction.respond(choices.slice(0, 25));
+      } catch (error) {
+        console.error("Error in image autocomplete:", error);
+        await interaction.respond([]);
+      }
+    } else if (focusedOption.name === "project" && group === "compose") {
+      try {
+        // 獲取 Docker Compose 項目列表
+        const projects = await dockerMonitor.listComposeProjects();
+
+        // 根據用戶輸入過濾項目
+        const search = focusedOption.value.toLowerCase();
+        const filtered = projects.filter((project) =>
+          project.name.toLowerCase().includes(search)
+        );
+
+        // 構建選項列表
+        const choices = filtered.map((project) => ({
+          name: `${project.name} (${project.status})`,
+          value: project.name,
+        }));
+
+        // 檢查是否像是文件路徑
+        if (
+          search.includes("/") ||
+          search.includes(".yml") ||
+          search.includes(".yaml")
+        ) {
+          // 如果用戶輸入看起來像是一個文件路徑，添加它作為選項
+          const exists = choices.some(
+            (choice) => choice.value === focusedOption.value
+          );
+
+          if (!exists) {
+            choices.push({
+              name: `${focusedOption.value} (文件路徑)`,
+              value: focusedOption.value,
+            });
+          }
+        }
+
+        await interaction.respond(choices.slice(0, 25));
+      } catch (error) {
+        console.error("Error in compose project autocomplete:", error);
+
+        // 在錯誤情況下，如果輸入看起來像是文件路徑，也提供它作為選項
+        const search = focusedOption.value;
+        if (
+          search.includes("/") ||
+          search.includes(".yml") ||
+          search.includes(".yaml")
+        ) {
+          await interaction.respond([
+            {
+              name: `${search} (文件路徑)`,
+              value: search,
+            },
+          ]);
+        } else {
+          await interaction.respond([]);
+        }
       }
     }
   },

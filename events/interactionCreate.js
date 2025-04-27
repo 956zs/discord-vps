@@ -857,6 +857,544 @@ module.exports = {
             components: [row],
           });
         }
+
+        // === Docker Compose 相關按鈕處理 ===
+        // 刷新 Compose 專案列表
+        else if (customId === "refresh_compose_projects") {
+          await interaction.deferUpdate();
+
+          try {
+            const projects = await dockerMonitor.listComposeProjects();
+            const embed = embedBuilder.createComposeProjectsListEmbed(projects);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId("refresh_compose_projects")
+              .setLabel("刷新")
+              .setStyle(ButtonStyle.Primary);
+
+            const row = new ActionRowBuilder().addComponents(refreshButton);
+
+            await interaction.editReply({ embeds: [embed], components: [row] });
+          } catch (error) {
+            console.error("Error refreshing compose projects:", error);
+            await interaction.editReply({
+              content: `刷新 Docker Compose 專案列表時出錯: ${error.message}`,
+              embeds: [],
+              components: [],
+            });
+          }
+        }
+
+        // 刷新 Compose 專案詳情
+        else if (customId.startsWith("refresh_compose_details_")) {
+          await interaction.deferUpdate();
+
+          const projectName = decodeURIComponent(
+            customId.replace("refresh_compose_details_", "")
+          );
+
+          try {
+            const projectDetails = await dockerMonitor.getComposeProjectDetails(
+              projectName
+            );
+            const embed =
+              embedBuilder.createComposeProjectDetailsEmbed(projectDetails);
+
+            const upButton = new ButtonBuilder()
+              .setCustomId(`compose_up_${encodeURIComponent(projectName)}`)
+              .setLabel("啟動")
+              .setStyle(ButtonStyle.Success);
+
+            const downButton = new ButtonBuilder()
+              .setCustomId(`compose_down_${encodeURIComponent(projectName)}`)
+              .setLabel("停止")
+              .setStyle(ButtonStyle.Danger);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`compose_restart_${encodeURIComponent(projectName)}`)
+              .setLabel("重啟")
+              .setStyle(ButtonStyle.Primary);
+
+            const pullButton = new ButtonBuilder()
+              .setCustomId(`compose_pull_${encodeURIComponent(projectName)}`)
+              .setLabel("拉取映像")
+              .setStyle(ButtonStyle.Secondary);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("刷新")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(
+              upButton,
+              downButton,
+              restartButton,
+              pullButton,
+              refreshButton
+            );
+
+            await interaction.editReply({ embeds: [embed], components: [row] });
+          } catch (error) {
+            console.error(
+              `Error refreshing compose details for ${projectName}:`,
+              error
+            );
+            await interaction.editReply({
+              content: `刷新 Docker Compose 專案詳情時出錯: ${error.message}`,
+              embeds: [],
+              components: [],
+            });
+          }
+        }
+
+        // 處理 Compose 操作按鈕 (up, down, restart)
+        else if (
+          customId.startsWith("compose_up_") ||
+          customId.startsWith("compose_down_") ||
+          customId.startsWith("compose_restart_")
+        ) {
+          await interaction.deferUpdate();
+
+          // 解析操作和專案名稱
+          const action = customId.split("_")[1]; // up, down, restart
+          const projectName = decodeURIComponent(
+            customId.split("_").slice(2).join("_")
+          );
+
+          // 進行確認
+          const confirmButton = new ButtonBuilder()
+            .setCustomId(
+              `confirm_compose_${action}_${encodeURIComponent(projectName)}`
+            )
+            .setLabel(
+              `確認${
+                action === "up" ? "啟動" : action === "down" ? "停止" : "重啟"
+              }`
+            )
+            .setStyle(ButtonStyle.Danger);
+
+          const cancelButton = new ButtonBuilder()
+            .setCustomId(
+              `cancel_compose_${action}_${encodeURIComponent(projectName)}`
+            )
+            .setLabel("取消")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            confirmButton,
+            cancelButton
+          );
+
+          let warningMessage = "";
+          if (action === "up") {
+            warningMessage = `您確定要啟動 Docker Compose 專案 \`${projectName}\` 嗎？這將啟動所有相關的容器。`;
+          } else if (action === "down") {
+            warningMessage = `您確定要停止 Docker Compose 專案 \`${projectName}\` 嗎？這將停止並移除所有相關的容器。`;
+          } else if (action === "restart") {
+            warningMessage = `您確定要重啟 Docker Compose 專案 \`${projectName}\` 嗎？這將重啟所有相關的容器。`;
+          }
+
+          await interaction.editReply({
+            content: warningMessage,
+            embeds: [],
+            components: [row],
+          });
+        }
+
+        // 處理 Compose pull 按鈕
+        else if (customId.startsWith("compose_pull_")) {
+          await interaction.deferUpdate();
+
+          const projectName = decodeURIComponent(
+            customId.replace("compose_pull_", "")
+          );
+
+          // 發送初始回應
+          await interaction.editReply({
+            content: `🔄 正在拉取 Docker Compose 專案 \`${projectName}\` 的映像... 這可能需要一些時間，取決於映像大小。`,
+            embeds: [],
+            components: [],
+          });
+
+          try {
+            // 執行拉取操作
+            const pullResult = await dockerMonitor.pullComposeImages(
+              projectName
+            );
+
+            // 創建嵌入消息
+            const embed = embedBuilder.createComposePullResultEmbed(pullResult);
+
+            // 創建按鈕
+            const detailsButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("查看專案詳情")
+              .setStyle(ButtonStyle.Primary);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`compose_restart_${encodeURIComponent(projectName)}`)
+              .setLabel("重啟容器")
+              .setStyle(ButtonStyle.Success);
+
+            const row = new ActionRowBuilder().addComponents(
+              detailsButton,
+              restartButton
+            );
+
+            // 更新回應
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(`Error pulling images for ${projectName}:`, error);
+
+            // 創建錯誤嵌入消息
+            const embed = new EmbedBuilder()
+              .setColor("#FF0000")
+              .setTitle(`Docker Compose Pull 失敗: ${projectName}`)
+              .setDescription(
+                `❌ 拉取 Docker Compose 專案 \`${projectName}\` 的映像時出錯`
+              )
+              .addFields({
+                name: "錯誤",
+                value: error.message || "未知錯誤",
+              })
+              .setTimestamp();
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [],
+            });
+          }
+        }
+
+        // 處理 Compose 操作確認按鈕
+        else if (customId.startsWith("confirm_compose_")) {
+          await interaction.deferUpdate();
+
+          // 解析操作和專案名稱
+          const parts = customId.replace("confirm_compose_", "").split("_");
+          const action = parts[0]; // up, down, restart
+          const projectName = decodeURIComponent(parts.slice(1).join("_"));
+
+          // 發送初始回應
+          await interaction.editReply({
+            content: `🔄 正在對 Docker Compose 專案 \`${projectName}\` 執行 \`${action}\` 操作... 請稍候。`,
+            embeds: [],
+            components: [],
+          });
+
+          try {
+            // 執行操作
+            const result = await dockerMonitor.controlComposeProject(
+              projectName,
+              action
+            );
+
+            // 創建嵌入消息
+            const embed =
+              embedBuilder.createComposeOperationResultEmbed(result);
+
+            // 創建按鈕
+            const detailsButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("查看專案詳情")
+              .setStyle(ButtonStyle.Primary);
+
+            const row = new ActionRowBuilder().addComponents(detailsButton);
+
+            // 更新回應
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(
+              `Error controlling project ${projectName} with action ${action}:`,
+              error
+            );
+
+            // 創建錯誤嵌入消息
+            const embed = new EmbedBuilder()
+              .setColor("#FF0000")
+              .setTitle(`Docker Compose ${action} 失敗: ${projectName}`)
+              .setDescription(
+                `❌ 對 Docker Compose 專案 \`${projectName}\` 執行 \`${action}\` 操作時出錯`
+              )
+              .addFields({
+                name: "錯誤",
+                value: error.message || "未知錯誤",
+              })
+              .setTimestamp();
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [],
+            });
+          }
+        }
+
+        // 處理 Compose 操作取消按鈕
+        else if (customId.startsWith("cancel_compose_")) {
+          await interaction.deferUpdate();
+
+          // 解析操作和專案名稱
+          const parts = customId.replace("cancel_compose_", "").split("_");
+          const action = parts[0];
+          const projectName = decodeURIComponent(parts.slice(1).join("_"));
+
+          // 返回專案詳情
+          try {
+            const projectDetails = await dockerMonitor.getComposeProjectDetails(
+              projectName
+            );
+            const embed =
+              embedBuilder.createComposeProjectDetailsEmbed(projectDetails);
+
+            const upButton = new ButtonBuilder()
+              .setCustomId(`compose_up_${encodeURIComponent(projectName)}`)
+              .setLabel("啟動")
+              .setStyle(ButtonStyle.Success);
+
+            const downButton = new ButtonBuilder()
+              .setCustomId(`compose_down_${encodeURIComponent(projectName)}`)
+              .setLabel("停止")
+              .setStyle(ButtonStyle.Danger);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`compose_restart_${encodeURIComponent(projectName)}`)
+              .setLabel("重啟")
+              .setStyle(ButtonStyle.Primary);
+
+            const pullButton = new ButtonBuilder()
+              .setCustomId(`compose_pull_${encodeURIComponent(projectName)}`)
+              .setLabel("拉取映像")
+              .setStyle(ButtonStyle.Secondary);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId(
+                `refresh_compose_details_${encodeURIComponent(projectName)}`
+              )
+              .setLabel("刷新")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(
+              upButton,
+              downButton,
+              restartButton,
+              pullButton,
+              refreshButton
+            );
+
+            await interaction.editReply({
+              content: `已取消${
+                action === "up" ? "啟動" : action === "down" ? "停止" : "重啟"
+              }操作。`,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(
+              `Error returning to compose details for ${projectName}:`,
+              error
+            );
+            await interaction.editReply({
+              content: `已取消操作，但獲取專案詳情時出錯: ${error.message}`,
+              embeds: [],
+              components: [],
+            });
+          }
+        }
+
+        // 處理查找使用特定映像的容器
+        else if (customId.startsWith("find_image_containers_")) {
+          await interaction.deferUpdate();
+
+          // 從ID中獲取映像名稱
+          const imageName = decodeURIComponent(
+            customId.replace("find_image_containers_", "")
+          );
+
+          // 獲取所有容器
+          const containers = await dockerMonitor.listContainers(true);
+
+          // 過濾使用此映像的容器
+          const imageContainers = containers.filter(
+            (container) =>
+              container.image === imageName ||
+              container.image.startsWith(`${imageName}@sha256:`)
+          );
+
+          if (imageContainers.length > 0) {
+            // 創建嵌入訊息顯示容器
+            const embed = new EmbedBuilder()
+              .setColor("#2496ED") // Docker blue
+              .setTitle(`容器使用映像: ${imageName}`)
+              .setDescription(
+                `找到 ${imageContainers.length} 個使用此映像的容器`
+              )
+              .setTimestamp();
+
+            // 按狀態分組容器
+            const running = imageContainers.filter(
+              (c) => c.state === "running"
+            );
+            const stopped = imageContainers.filter((c) => c.state === "exited");
+            const others = imageContainers.filter(
+              (c) => c.state !== "running" && c.state !== "exited"
+            );
+
+            // 添加運行中的容器
+            if (running.length > 0) {
+              const runningList = running
+                .map(
+                  (c, i) =>
+                    `**${i + 1}.** \`${c.names[0] || c.id}\`\n` +
+                    `   狀態: ${c.status}\n`
+                )
+                .join("");
+
+              embed.addFields({
+                name: "✅ 運行中的容器",
+                value: runningList,
+                inline: false,
+              });
+            }
+
+            // 添加已停止的容器
+            if (stopped.length > 0) {
+              const stoppedList = stopped
+                .map(
+                  (c, i) =>
+                    `**${i + 1}.** \`${c.names[0] || c.id}\`\n` +
+                    `   狀態: ${c.status}\n`
+                )
+                .join("");
+
+              embed.addFields({
+                name: "⛔ 已停止的容器",
+                value: stoppedList,
+                inline: false,
+              });
+            }
+
+            // 添加其他狀態的容器
+            if (others.length > 0) {
+              const othersList = others
+                .map(
+                  (c, i) =>
+                    `**${i + 1}.** \`${c.names[0] || c.id}\`: ${c.status}\n`
+                )
+                .join("");
+
+              embed.addFields({
+                name: "⚠️ 其他容器",
+                value: othersList,
+                inline: false,
+              });
+            }
+
+            // 添加更新步驟說明
+            embed.addFields({
+              name: "更新這些容器",
+              value:
+                "要更新這些容器使用的映像，請遵循以下步驟：\n" +
+                "1. 使用 `/docker control` 停止容器\n" +
+                "2. 刪除舊容器 (未來功能)\n" +
+                "3. 使用新映像創建新容器 (未來功能)",
+              inline: false,
+            });
+
+            // 創建選單用於選擇容器
+            if (imageContainers.length > 0 && imageContainers.length <= 25) {
+              const containerSelect = new StringSelectMenuBuilder()
+                .setCustomId("container_select")
+                .setPlaceholder("選擇容器查看詳細信息...")
+                .addOptions(
+                  imageContainers.map((container) => ({
+                    label: container.names[0] || container.id.substring(0, 12),
+                    description: `${container.image.substring(0, 30)}... (${
+                      container.state
+                    })`,
+                    value: container.id,
+                    emoji:
+                      container.state === "running"
+                        ? "✅"
+                        : container.state === "exited"
+                        ? "⛔"
+                        : "⚠️",
+                  }))
+                );
+
+              const selectRow = new ActionRowBuilder().addComponents(
+                containerSelect
+              );
+
+              // 創建額外按鈕
+              const backButton = new ButtonBuilder()
+                .setCustomId("docker_images")
+                .setLabel("返回映像列表")
+                .setStyle(ButtonStyle.Secondary);
+
+              const buttonsRow = new ActionRowBuilder().addComponents(
+                backButton
+              );
+
+              await interaction.editReply({
+                content: null,
+                embeds: [embed],
+                components: [buttonsRow, selectRow],
+              });
+            } else {
+              // 如果容器太多，只顯示返回按鈕
+              const backButton = new ButtonBuilder()
+                .setCustomId("docker_images")
+                .setLabel("返回映像列表")
+                .setStyle(ButtonStyle.Secondary);
+
+              const buttonsRow = new ActionRowBuilder().addComponents(
+                backButton
+              );
+
+              await interaction.editReply({
+                content: null,
+                embeds: [embed],
+                components: [buttonsRow],
+              });
+            }
+          } else {
+            // 沒有找到使用此映像的容器
+            const embed = new EmbedBuilder()
+              .setColor("#2496ED")
+              .setTitle(`容器使用映像: ${imageName}`)
+              .setDescription("未找到使用此映像的容器")
+              .setTimestamp();
+
+            const backButton = new ButtonBuilder()
+              .setCustomId("docker_images")
+              .setLabel("返回映像列表")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(backButton);
+
+            await interaction.editReply({
+              content: null,
+              embeds: [embed],
+              components: [row],
+            });
+          }
+        }
       } catch (error) {
         console.error("Error handling button interaction:", error);
         await interaction.reply({
