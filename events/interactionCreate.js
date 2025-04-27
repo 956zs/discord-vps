@@ -6,6 +6,7 @@ const {
   ButtonStyle,
   ActionRowBuilder,
   StringSelectMenuBuilder,
+  EmbedBuilder,
 } = require("discord.js");
 
 module.exports = {
@@ -339,7 +340,89 @@ module.exports = {
             logs
           );
 
-          await interaction.editReply({ embeds: [embed] });
+          const refreshButton = new ButtonBuilder()
+            .setCustomId(`refresh_logs_${containerInfo.id}`)
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          const detailsButton = new ButtonBuilder()
+            .setCustomId(`container_details_${containerInfo.id}`)
+            .setLabel("Details")
+            .setStyle(ButtonStyle.Secondary);
+
+          const downloadButton = new ButtonBuilder()
+            .setCustomId(`download_logs_${containerInfo.id}`)
+            .setLabel("Download Full Logs")
+            .setStyle(ButtonStyle.Success);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            detailsButton,
+            downloadButton
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+
+        // Download full logs button
+        else if (customId.startsWith("download_logs_")) {
+          await interaction.deferUpdate();
+          const containerId = customId.replace("download_logs_", "");
+          const containerInfo = await dockerMonitor.getContainerInfo(
+            containerId
+          );
+
+          try {
+            // Get all logs (null parameter)
+            const logs = await dockerMonitor.getContainerLogs(
+              containerId,
+              null
+            );
+
+            // Create log file contents with timestamp
+            const timestamp = new Date().toISOString().replace(/:/g, "-");
+            const fileName = `${containerInfo.name.replace(
+              /[^a-zA-Z0-9]/g,
+              "_"
+            )}_logs_${timestamp}.txt`;
+
+            // Create the embed for notification
+            const embed = new EmbedBuilder()
+              .setColor("#2496ED") // Docker blue
+              .setTitle(`📥 Docker Logs: ${containerInfo.name}`)
+              .setDescription(
+                `Complete logs for container ${containerInfo.name} are attached.`
+              )
+              .addFields(
+                { name: "Container", value: containerInfo.name, inline: true },
+                { name: "ID", value: containerInfo.id, inline: true },
+                {
+                  name: "Status",
+                  value: containerInfo.state.status,
+                  inline: true,
+                }
+              )
+              .setTimestamp();
+
+            // Upload the logs as file attachment
+            await interaction.editReply({
+              embeds: [embed],
+              files: [
+                {
+                  attachment: Buffer.from(logs),
+                  name: fileName,
+                },
+              ],
+              components: [], // Remove buttons for this specific response
+            });
+          } catch (error) {
+            console.error(`Error downloading logs for ${containerId}:`, error);
+            await interaction.editReply({
+              content: `Error downloading logs: ${error.message}`,
+              components: [],
+              embeds: [],
+            });
+          }
         }
 
         // Docker containers button - shows container list

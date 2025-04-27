@@ -4,9 +4,8 @@
  * 此文件包含Discord斜線命令 "/docker" 的所有功能，允許用戶:
  * 1. 查看Docker系統資訊 (/docker info)
  * 2. 列出所有容器 (/docker containers)
- * 3. 查看特定容器的詳細資訊 (/docker details)
- * 4. 查看容器日誌 (/docker logs)
- * 5. 控制容器狀態 (/docker control)
+ * 3. 查看容器日誌 (/docker logs)
+ * 4. 控制容器狀態 (/docker control)
  *
  * 主要特色功能:
  * - 自動完成功能: 在輸入容器名稱/ID時，會顯示下拉選單供選擇
@@ -41,6 +40,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   StringSelectMenuBuilder,
+  EmbedBuilder,
 } = require("discord.js");
 const dockerMonitor = require("../utils/dockerMonitor");
 const embedBuilder = require("../utils/embedBuilder");
@@ -67,18 +67,6 @@ module.exports = {
     )
     .addSubcommand((subcommand) =>
       subcommand
-        .setName("details")
-        .setDescription("Show detailed information about a container")
-        .addStringOption((option) =>
-          option
-            .setName("container")
-            .setDescription("Container ID or name")
-            .setRequired(true)
-            .setAutocomplete(true)
-        )
-    )
-    .addSubcommand((subcommand) =>
-      subcommand
         .setName("logs")
         .setDescription("Show logs from a container")
         .addStringOption((option) =>
@@ -92,6 +80,12 @@ module.exports = {
           option
             .setName("lines")
             .setDescription("Number of log lines to show")
+            .setRequired(false)
+        )
+        .addBooleanOption((option) =>
+          option
+            .setName("download")
+            .setDescription("Download full logs as a file")
             .setRequired(false)
         )
     )
@@ -158,77 +152,84 @@ module.exports = {
         const row = new ActionRowBuilder().addComponents(refreshButton);
 
         await interaction.editReply({ embeds: [embed], components: [row] });
-      } else if (subcommand === "details") {
-        const containerId = interaction.options.getString("container");
-        const containerInfo = await dockerMonitor.getContainerInfo(containerId);
-        const embed = embedBuilder.createContainerDetailsEmbed(containerInfo);
-
-        const startButton = new ButtonBuilder()
-          .setCustomId(`container_start_${containerInfo.id}`)
-          .setLabel("Start")
-          .setStyle(ButtonStyle.Success)
-          .setDisabled(containerInfo.state.running);
-
-        const stopButton = new ButtonBuilder()
-          .setCustomId(`container_stop_${containerInfo.id}`)
-          .setLabel("Stop")
-          .setStyle(ButtonStyle.Danger)
-          .setDisabled(!containerInfo.state.running);
-
-        const restartButton = new ButtonBuilder()
-          .setCustomId(`container_restart_${containerInfo.id}`)
-          .setLabel("Restart")
-          .setStyle(ButtonStyle.Primary)
-          .setDisabled(!containerInfo.state.running);
-
-        const logsButton = new ButtonBuilder()
-          .setCustomId(`container_logs_${containerInfo.id}`)
-          .setLabel("Logs")
-          .setStyle(ButtonStyle.Secondary);
-
-        const refreshButton = new ButtonBuilder()
-          .setCustomId(`refresh_container_${containerInfo.id}`)
-          .setLabel("Refresh")
-          .setStyle(ButtonStyle.Secondary);
-
-        const row = new ActionRowBuilder().addComponents(
-          startButton,
-          stopButton,
-          restartButton,
-          logsButton,
-          refreshButton
-        );
-
-        await interaction.editReply({ embeds: [embed], components: [row] });
       } else if (subcommand === "logs") {
         const containerId = interaction.options.getString("container");
         const lines = interaction.options.getInteger("lines") || 100;
+        const download = interaction.options.getBoolean("download") || false;
 
         const containerInfo = await dockerMonitor.getContainerInfo(containerId);
-        const logs = await dockerMonitor.getContainerLogs(containerId, lines);
-
-        const embed = embedBuilder.createContainerLogsEmbed(
-          containerInfo.id,
-          containerInfo.name,
-          logs
+        const logs = await dockerMonitor.getContainerLogs(
+          containerId,
+          download ? null : lines
         );
 
-        const refreshButton = new ButtonBuilder()
-          .setCustomId(`refresh_logs_${containerInfo.id}`)
-          .setLabel("Refresh")
-          .setStyle(ButtonStyle.Primary);
+        if (download) {
+          // Create log file contents with timestamp
+          const timestamp = new Date().toISOString().replace(/:/g, "-");
+          const fileName = `${containerInfo.name.replace(
+            /[^a-zA-Z0-9]/g,
+            "_"
+          )}_logs_${timestamp}.txt`;
 
-        const detailsButton = new ButtonBuilder()
-          .setCustomId(`container_details_${containerInfo.id}`)
-          .setLabel("Details")
-          .setStyle(ButtonStyle.Secondary);
+          // Create the embed for notification
+          const embed = new EmbedBuilder()
+            .setColor("#2496ED") // Docker blue
+            .setTitle(`📥 Docker Logs: ${containerInfo.name}`)
+            .setDescription(
+              `Complete logs for container ${containerInfo.name} are attached.`
+            )
+            .addFields(
+              { name: "Container", value: containerInfo.name, inline: true },
+              { name: "ID", value: containerInfo.id, inline: true },
+              {
+                name: "Status",
+                value: containerInfo.state.status,
+                inline: true,
+              }
+            )
+            .setTimestamp();
 
-        const row = new ActionRowBuilder().addComponents(
-          refreshButton,
-          detailsButton
-        );
+          // Upload the logs as file attachment
+          await interaction.editReply({
+            embeds: [embed],
+            files: [
+              {
+                attachment: Buffer.from(logs),
+                name: fileName,
+              },
+            ],
+          });
+        } else {
+          // Display logs in embed as before
+          const embed = embedBuilder.createContainerLogsEmbed(
+            containerInfo.id,
+            containerInfo.name,
+            logs
+          );
 
-        await interaction.editReply({ embeds: [embed], components: [row] });
+          const refreshButton = new ButtonBuilder()
+            .setCustomId(`refresh_logs_${containerInfo.id}`)
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          const detailsButton = new ButtonBuilder()
+            .setCustomId(`container_details_${containerInfo.id}`)
+            .setLabel("Details")
+            .setStyle(ButtonStyle.Secondary);
+
+          const downloadButton = new ButtonBuilder()
+            .setCustomId(`download_logs_${containerInfo.id}`)
+            .setLabel("Download Full Logs")
+            .setStyle(ButtonStyle.Success);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            detailsButton,
+            downloadButton
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        }
       } else if (subcommand === "control") {
         const containerId = interaction.options.getString("container");
         const action = interaction.options.getString("action");

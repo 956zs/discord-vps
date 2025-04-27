@@ -290,18 +290,25 @@ async function getDockerInfo() {
 /**
  * Get container logs
  * @param {string} containerId - ID or name of the container
- * @param {number} lines - Number of log lines to retrieve
+ * @param {number|null} lines - Number of log lines to retrieve, null for all logs
  * @returns {Promise<string>} Container logs
  */
 async function getContainerLogs(containerId, lines = 100) {
   try {
     const container = docker.getContainer(containerId);
-    const logs = await container.logs({
+
+    const options = {
       stdout: true,
       stderr: true,
-      tail: lines,
       timestamps: true,
-    });
+    };
+
+    // If lines is not null, add tail option
+    if (lines !== null) {
+      options.tail = lines;
+    }
+
+    const logs = await container.logs(options);
 
     // Convert Buffer to string and parse the log format
     return logs.toString("utf8");

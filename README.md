@@ -94,17 +94,13 @@ A Discord bot for monitoring and managing your VPS and Docker containers using s
 
 - **`/docker containers [all]`** - List Docker containers
   - View all containers grouped by state (running, stopped, other)
-  - Select containers from dropdown for quick access
+  - Select containers from dropdown for quick access to container details
   - Optional `all` parameter to show/hide stopped containers
 
-- **`/docker details <container>`** - Show container details
-  - View detailed information about a specific container
-  - Container stats, network, mounts, and configuration
-  - Control buttons for managing the container
-
-- **`/docker logs <container> [lines]`** - Show container logs
+- **`/docker logs <container> [lines] [download]`** - Show container logs
   - View recent logs from a container
   - Specify how many lines to display
+  - Download complete logs as a text file
   - Click "Refresh" to get the latest logs
 
 - **`/docker control <container> <action>`** - Control a container
