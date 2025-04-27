@@ -482,21 +482,21 @@ async function getComposeProjectDetails(projectName) {
     const child_process = require("child_process");
     const path = require("path");
     const fs = require("fs");
+    const os = require("os");
 
     // 檢查項目名稱或路徑是否有效
     if (!projectName || projectName.trim() === "") {
       throw new Error("未提供項目名稱或路徑");
     }
 
-    // 檢查是否為路徑
-    const isPath = projectName.includes("/");
+    // 檢查是否為絕對路徑或相對路徑
+    const isPath = projectName.includes("/") || projectName.includes("\\");
+    let composeFilePath = projectName;
+    let fileExists = false;
 
     // 如果是路徑，驗證 docker-compose.yml 或 docker-compose.yaml 存在
     if (isPath) {
       // 檢查文件是否存在
-      let composeFilePath = projectName;
-      let fileExists = false;
-
       // 如果路徑不是以 .yml 或 .yaml 結尾，嘗試查找 docker-compose.yml 或 docker-compose.yaml
       if (!projectName.endsWith(".yml") && !projectName.endsWith(".yaml")) {
         const ymlPath = path.join(projectName, "docker-compose.yml");
@@ -512,22 +512,63 @@ async function getComposeProjectDetails(projectName) {
       } else {
         fileExists = fs.existsSync(projectName);
       }
+    } else {
+      // 如果不是路徑，先嘗試查找專案名稱的目錄
+      // 1. 先檢查當前目錄下有沒有該名稱的資料夾
+      const currentDirProject = path.join(process.cwd(), projectName);
+      if (
+        fs.existsSync(currentDirProject) &&
+        fs.statSync(currentDirProject).isDirectory()
+      ) {
+        const ymlPath = path.join(currentDirProject, "docker-compose.yml");
+        const yamlPath = path.join(currentDirProject, "docker-compose.yaml");
 
-      if (!fileExists) {
-        throw new Error(`Docker Compose 配置文件在 ${projectName} 中不存在`);
+        if (fs.existsSync(ymlPath)) {
+          composeFilePath = ymlPath;
+          fileExists = true;
+        } else if (fs.existsSync(yamlPath)) {
+          composeFilePath = yamlPath;
+          fileExists = true;
+        }
       }
 
-      // 更新路徑為實際存在的文件路徑
-      projectName = composeFilePath;
-      console.log(`使用 Docker Compose 配置文件: ${projectName}`);
+      // 2. 如果當前目錄下沒有，嘗試在用戶主目錄下查找
+      if (!fileExists) {
+        const homeDirProject = path.join(os.homedir(), projectName);
+        if (
+          fs.existsSync(homeDirProject) &&
+          fs.statSync(homeDirProject).isDirectory()
+        ) {
+          const ymlPath = path.join(homeDirProject, "docker-compose.yml");
+          const yamlPath = path.join(homeDirProject, "docker-compose.yaml");
+
+          if (fs.existsSync(ymlPath)) {
+            composeFilePath = ymlPath;
+            fileExists = true;
+          } else if (fs.existsSync(yamlPath)) {
+            composeFilePath = yamlPath;
+            fileExists = true;
+          }
+        }
+      }
     }
 
     // 使用更直接的方式獲取項目詳情
     return new Promise((resolve, reject) => {
       // 設置工作目錄參數
-      const workingDirArg = isPath
-        ? `-f "${projectName.replace(/\\/g, "/").replace(/"/g, '\\"')}"`
-        : `--project-name ${projectName}`;
+      let workingDirArg;
+
+      if (fileExists) {
+        // 如果找到了文件，使用文件路徑
+        console.log(`找到 Docker Compose 配置文件: ${composeFilePath}`);
+        workingDirArg = `-f "${composeFilePath
+          .replace(/\\/g, "/")
+          .replace(/"/g, '\\"')}"`;
+      } else {
+        // 如果沒有找到文件，使用專案名稱
+        console.log(`使用專案名稱: ${projectName}，未找到對應的配置文件`);
+        workingDirArg = `--project-name ${projectName}`;
+      }
 
       // 輸出完整命令用於調試
       console.log(
@@ -560,8 +601,10 @@ async function getComposeProjectDetails(projectName) {
             // 項目可能存在但沒有運行中的服務
             resolve({
               name: projectName,
-              workingDir: isPath ? path.dirname(projectName) : "",
-              file: isPath ? path.basename(projectName) : "docker-compose.yml",
+              workingDir: isPath ? path.dirname(composeFilePath) : "",
+              file: isPath
+                ? path.basename(composeFilePath)
+                : "docker-compose.yml",
               services: [],
               networks: [],
               volumes: [],
@@ -624,12 +667,12 @@ async function getComposeProjectDetails(projectName) {
               }
 
               resolve({
-                name: isPath ? projectName : config.name || projectName,
-                workingDir: isPath
-                  ? path.dirname(projectName)
+                name: fileExists ? composeFilePath : config.name || projectName,
+                workingDir: fileExists
+                  ? path.dirname(composeFilePath)
                   : config.workingDir || "",
-                file: isPath
-                  ? path.basename(projectName)
+                file: fileExists
+                  ? path.basename(composeFilePath)
                   : "docker-compose.yml",
                 services: services,
                 networks: networks,
@@ -660,21 +703,22 @@ async function pullComposeImages(projectNameOrPath) {
     const child_process = require("child_process");
     const fs = require("fs");
     const path = require("path");
+    const os = require("os");
 
     // 檢查項目名稱或路徑是否有效
     if (!projectNameOrPath || projectNameOrPath.trim() === "") {
       throw new Error("未提供項目名稱或路徑");
     }
 
-    // 檢查是否為路徑
-    const isPath = projectNameOrPath.includes("/");
+    // 檢查是否為絕對路徑或相對路徑
+    const isPath =
+      projectNameOrPath.includes("/") || projectNameOrPath.includes("\\");
+    let composeFilePath = projectNameOrPath;
+    let fileExists = false;
 
     // 如果是路徑，驗證 docker-compose.yml 或 docker-compose.yaml 存在
     if (isPath) {
       // 檢查文件是否存在
-      let composeFilePath = projectNameOrPath;
-      let fileExists = false;
-
       // 如果路徑不是以 .yml 或 .yaml 結尾，嘗試查找 docker-compose.yml 或 docker-compose.yaml
       if (
         !projectNameOrPath.endsWith(".yml") &&
@@ -693,36 +737,75 @@ async function pullComposeImages(projectNameOrPath) {
       } else {
         fileExists = fs.existsSync(projectNameOrPath);
       }
+    } else {
+      // 如果不是路徑，先嘗試查找專案名稱的目錄
+      // 1. 先檢查當前目錄下有沒有該名稱的資料夾
+      const currentDirProject = path.join(process.cwd(), projectNameOrPath);
+      if (
+        fs.existsSync(currentDirProject) &&
+        fs.statSync(currentDirProject).isDirectory()
+      ) {
+        const ymlPath = path.join(currentDirProject, "docker-compose.yml");
+        const yamlPath = path.join(currentDirProject, "docker-compose.yaml");
 
-      if (!fileExists) {
-        throw new Error(
-          `Docker Compose 配置文件在 ${projectNameOrPath} 中不存在`
-        );
+        if (fs.existsSync(ymlPath)) {
+          composeFilePath = ymlPath;
+          fileExists = true;
+        } else if (fs.existsSync(yamlPath)) {
+          composeFilePath = yamlPath;
+          fileExists = true;
+        }
       }
 
-      // 更新路徑為實際存在的文件路徑
-      projectNameOrPath = composeFilePath;
-      console.log(`使用 Docker Compose 配置文件: ${projectNameOrPath}`);
+      // 2. 如果當前目錄下沒有，嘗試在用戶主目錄下查找
+      if (!fileExists) {
+        const homeDirProject = path.join(os.homedir(), projectNameOrPath);
+        if (
+          fs.existsSync(homeDirProject) &&
+          fs.statSync(homeDirProject).isDirectory()
+        ) {
+          const ymlPath = path.join(homeDirProject, "docker-compose.yml");
+          const yamlPath = path.join(homeDirProject, "docker-compose.yaml");
+
+          if (fs.existsSync(ymlPath)) {
+            composeFilePath = ymlPath;
+            fileExists = true;
+          } else if (fs.existsSync(yamlPath)) {
+            composeFilePath = yamlPath;
+            fileExists = true;
+          }
+        }
+      }
     }
 
-    // 設置工作目錄參數
-    const workingDirArg = isPath
-      ? `-f "${projectNameOrPath.replace(/\\/g, "/").replace(/"/g, '\\"')}"`
-      : `--project-name ${projectNameOrPath}`;
+    // 設置工作目錄參數和命令
+    let command = ["compose"];
+    let workingDirArg;
+
+    if (fileExists) {
+      // 如果找到了文件，使用文件路徑
+      console.log(`找到 Docker Compose 配置文件: ${composeFilePath}`);
+      workingDirArg = `-f "${composeFilePath
+        .replace(/\\/g, "/")
+        .replace(/"/g, '\\"')}"`;
+      command = command.concat(workingDirArg.split(" "));
+    } else {
+      // 如果沒有找到文件，使用專案名稱
+      console.log(`使用專案名稱: ${projectNameOrPath}，未找到對應的配置文件`);
+      workingDirArg = `--project-name ${projectNameOrPath}`;
+      command = command.concat(workingDirArg.split(" "));
+    }
+
+    // 添加pull命令
+    command.push("pull");
 
     // 輸出完整命令用於調試
-    console.log(
-      `執行 Docker Compose 命令: docker compose ${workingDirArg} pull`
-    );
+    console.log(`執行 Docker Compose 命令: docker ${command.join(" ")}`);
 
     // 執行 pull 命令
-    const childProcess = child_process.spawn(
-      "docker",
-      ["compose", ...workingDirArg.split(" "), "pull"],
-      {
-        shell: true,
-      }
-    );
+    const childProcess = child_process.spawn("docker", command, {
+      shell: true,
+    });
 
     // 收集輸出
     let output = "";
@@ -746,13 +829,13 @@ async function pullComposeImages(projectNameOrPath) {
         if (code === 0) {
           resolve({
             success: true,
-            project: projectNameOrPath,
+            project: composeFilePath,
             output: output.trim(),
           });
         } else {
           resolve({
             success: false,
-            project: projectNameOrPath,
+            project: composeFilePath,
             error: errors.trim() || `Process exited with code ${code}`,
           });
         }
@@ -788,21 +871,22 @@ async function controlComposeProject(
     const child_process = require("child_process");
     const fs = require("fs");
     const path = require("path");
+    const os = require("os");
 
     // 檢查項目名稱或路徑是否有效
     if (!projectNameOrPath || projectNameOrPath.trim() === "") {
       throw new Error("未提供項目名稱或路徑");
     }
 
-    // 檢查是否為路徑
-    const isPath = projectNameOrPath.includes("/");
+    // 檢查是否為絕對路徑或相對路徑
+    const isPath =
+      projectNameOrPath.includes("/") || projectNameOrPath.includes("\\");
+    let composeFilePath = projectNameOrPath;
+    let fileExists = false;
 
     // 如果是路徑，驗證 docker-compose.yml 或 docker-compose.yaml 存在
     if (isPath) {
       // 檢查文件是否存在
-      let composeFilePath = projectNameOrPath;
-      let fileExists = false;
-
       // 如果路徑不是以 .yml 或 .yaml 結尾，嘗試查找 docker-compose.yml 或 docker-compose.yaml
       if (
         !projectNameOrPath.endsWith(".yml") &&
@@ -821,26 +905,64 @@ async function controlComposeProject(
       } else {
         fileExists = fs.existsSync(projectNameOrPath);
       }
+    } else {
+      // 如果不是路徑，先嘗試查找專案名稱的目錄
+      // 1. 先檢查當前目錄下有沒有該名稱的資料夾
+      const currentDirProject = path.join(process.cwd(), projectNameOrPath);
+      if (
+        fs.existsSync(currentDirProject) &&
+        fs.statSync(currentDirProject).isDirectory()
+      ) {
+        const ymlPath = path.join(currentDirProject, "docker-compose.yml");
+        const yamlPath = path.join(currentDirProject, "docker-compose.yaml");
 
-      if (!fileExists) {
-        throw new Error(
-          `Docker Compose 配置文件在 ${projectNameOrPath} 中不存在`
-        );
+        if (fs.existsSync(ymlPath)) {
+          composeFilePath = ymlPath;
+          fileExists = true;
+        } else if (fs.existsSync(yamlPath)) {
+          composeFilePath = yamlPath;
+          fileExists = true;
+        }
       }
 
-      // 更新路徑為實際存在的文件路徑
-      projectNameOrPath = composeFilePath;
-      console.log(`使用 Docker Compose 配置文件: ${projectNameOrPath}`);
+      // 2. 如果當前目錄下沒有，嘗試在用戶主目錄下查找
+      if (!fileExists) {
+        const homeDirProject = path.join(os.homedir(), projectNameOrPath);
+        if (
+          fs.existsSync(homeDirProject) &&
+          fs.statSync(homeDirProject).isDirectory()
+        ) {
+          const ymlPath = path.join(homeDirProject, "docker-compose.yml");
+          const yamlPath = path.join(homeDirProject, "docker-compose.yaml");
+
+          if (fs.existsSync(ymlPath)) {
+            composeFilePath = ymlPath;
+            fileExists = true;
+          } else if (fs.existsSync(yamlPath)) {
+            composeFilePath = yamlPath;
+            fileExists = true;
+          }
+        }
+      }
     }
 
-    // 設置工作目錄參數
-    const workingDirArg = isPath
-      ? `-f "${projectNameOrPath.replace(/\\/g, "/").replace(/"/g, '\\"')}"`
-      : `--project-name ${projectNameOrPath}`;
-
-    // 設置命令選項
+    // 設置工作目錄參數和命令
     let command = ["compose"];
-    command = command.concat(workingDirArg.split(" "));
+    let workingDirArg;
+
+    if (fileExists) {
+      // 如果找到了文件，使用文件路徑
+      console.log(`找到 Docker Compose 配置文件: ${composeFilePath}`);
+      workingDirArg = `-f "${composeFilePath
+        .replace(/\\/g, "/")
+        .replace(/"/g, '\\"')}"`;
+      command = command.concat(workingDirArg.split(" "));
+    } else {
+      // 如果沒有找到文件，使用專案名稱
+      console.log(`使用專案名稱: ${projectNameOrPath}，未找到對應的配置文件`);
+      workingDirArg = `--project-name ${projectNameOrPath}`;
+      command = command.concat(workingDirArg.split(" "));
+    }
 
     switch (action.toLowerCase()) {
       case "up":
@@ -895,14 +1017,14 @@ async function controlComposeProject(
         if (code === 0) {
           resolve({
             success: true,
-            project: projectNameOrPath,
+            project: composeFilePath,
             action: action,
             output: output.trim(),
           });
         } else {
           resolve({
             success: false,
-            project: projectNameOrPath,
+            project: composeFilePath,
             action: action,
             error: errors.trim() || `Process exited with code ${code}`,
           });
