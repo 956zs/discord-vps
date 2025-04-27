@@ -421,54 +421,81 @@ async function listImages() {
 }
 
 /**
- * List Docker Compose projects
- * @returns {Promise<Array>} List of Docker Compose projects
+ * 列出所有的 Docker Compose 項目
+ * @returns {Promise<Array>} 項目列表
  */
 async function listComposeProjects() {
   try {
-    // 使用更簡單的方法獲取 Docker Compose 項目列表
-    const child_process = require("child_process");
+    // 从 Docker Compose 命令获取项目列表
+    const { stdout } = await exec("docker compose ls --format json");
+    let projects = [];
 
-    return new Promise((resolve, reject) => {
-      // 使用命令行獲取項目列表
-      child_process.exec("docker compose ls", (error, stdout, stderr) => {
-        if (error) {
-          console.error("Error executing docker compose ls:", error);
-          reject(error);
-          return;
+    if (stdout.trim()) {
+      try {
+        projects = JSON.parse(stdout);
+      } catch (e) {
+        console.error("Failed to parse Docker Compose project list:", e);
+      }
+    }
+
+    // 增强项目列表，增加检测当前目录和用户主目录中的 Docker Compose 项目
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const os = require("os");
+
+      // 要搜索的目录
+      const dirsToSearch = [
+        process.cwd(), // 当前工作目录
+        os.homedir(), // 用户主目录
+      ];
+
+      for (const baseDir of dirsToSearch) {
+        try {
+          // 获取目录列表
+          const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+
+          // 筛选出目录，检查它们是否包含 docker-compose.yml 或 docker-compose.yaml
+          for (const entry of entries) {
+            if (entry.isDirectory()) {
+              const dirPath = path.join(baseDir, entry.name);
+              const ymlPath = path.join(dirPath, "docker-compose.yml");
+              const yamlPath = path.join(dirPath, "docker-compose.yaml");
+
+              // 检查目录中是否有 docker-compose 文件
+              if (fs.existsSync(ymlPath) || fs.existsSync(yamlPath)) {
+                // 检查是否已经在项目列表中
+                const existingProject = projects.find(
+                  (p) => p.name === entry.name
+                );
+
+                if (!existingProject) {
+                  // 添加到项目列表，状态设为 "unknown"（因为我们只知道文件存在，不知道运行状态）
+                  projects.push({
+                    name: entry.name,
+                    status: "unknown",
+                    configFiles: [fs.existsSync(ymlPath) ? ymlPath : yamlPath],
+                    workingDir: dirPath,
+                  });
+                }
+              }
+            }
+          }
+        } catch (dirError) {
+          console.warn(`Error scanning directory ${baseDir}:`, dirError);
         }
+      }
+    } catch (fsError) {
+      console.warn(
+        "Error while searching for local Docker Compose projects:",
+        fsError
+      );
+    }
 
-        if (stderr) {
-          console.warn("Warning from docker compose ls:", stderr);
-        }
-
-        // 解析命令行輸出
-        const lines = stdout.trim().split("\n");
-        if (lines.length <= 1) {
-          // 只有標題行或沒有輸出
-          resolve([]);
-          return;
-        }
-
-        // 跳過標題行
-        const projectLines = lines.slice(1);
-        const projects = projectLines.map((line) => {
-          const parts = line.trim().split(/\s{2,}/);
-          // 通常格式是: NAME STATUS CONFIG FILES
-          return {
-            name: parts[0] || "unknown",
-            status: parts[1] || "unknown",
-            configFiles: parts[2] || "",
-            workingDir: parts[3] || "",
-          };
-        });
-
-        resolve(projects);
-      });
-    });
+    return projects;
   } catch (error) {
     console.error("Error listing Docker Compose projects:", error);
-    throw error;
+    return [];
   }
 }
 

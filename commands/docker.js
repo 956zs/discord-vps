@@ -724,20 +724,74 @@ module.exports = {
       try {
         // 獲取 Docker Compose 項目列表
         const projects = await dockerMonitor.listComposeProjects();
-
-        // 根據用戶輸入過濾項目
         const search = focusedOption.value.toLowerCase();
-        const filtered = projects.filter((project) =>
+        let choices = [];
+
+        // 1. 添加 Docker Compose 命令找到的項目
+        const filteredProjects = projects.filter((project) =>
           project.name.toLowerCase().includes(search)
         );
 
-        // 構建選項列表
-        const choices = filtered.map((project) => ({
+        choices = filteredProjects.map((project) => ({
           name: `${project.name} (${project.status})`,
           value: project.name,
         }));
 
-        // 檢查是否像是文件路徑
+        // 2. 查找主目錄和當前目錄中可能的 Docker Compose 專案目錄
+        try {
+          const fs = require("fs");
+          const path = require("path");
+          const os = require("os");
+
+          // 要搜索的潛在目錄
+          const dirsToSearch = [
+            process.cwd(), // 當前工作目錄
+            os.homedir(), // 用戶主目錄
+          ];
+
+          for (const baseDir of dirsToSearch) {
+            // 獲取目錄列表
+            const entries = fs.readdirSync(baseDir, { withFileTypes: true });
+
+            // 篩選出目錄，並檢查它們是否包含 docker-compose.yml
+            for (const entry of entries) {
+              if (
+                entry.isDirectory() &&
+                entry.name.toLowerCase().includes(search)
+              ) {
+                const dirPath = path.join(baseDir, entry.name);
+                const ymlPath = path.join(dirPath, "docker-compose.yml");
+                const yamlPath = path.join(dirPath, "docker-compose.yaml");
+
+                // 檢查目錄中是否有 docker-compose 檔案
+                if (fs.existsSync(ymlPath) || fs.existsSync(yamlPath)) {
+                  // 檢查是否已經在選項中
+                  const exists = choices.some(
+                    (choice) => choice.value === entry.name
+                  );
+
+                  if (!exists) {
+                    // 添加到選項，顯示目錄位置
+                    const displayPath =
+                      baseDir === os.homedir() ? `~/${entry.name}` : dirPath;
+
+                    choices.push({
+                      name: `${entry.name} (目錄: ${displayPath})`,
+                      value: entry.name,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch (fsError) {
+          console.warn(
+            "Error scanning directories for Docker Compose projects:",
+            fsError
+          );
+        }
+
+        // 3. 檢查是否像是文件路徑
         if (
           search.includes("/") ||
           search.includes(".yml") ||
@@ -756,6 +810,14 @@ module.exports = {
           }
         }
 
+        // 如果用戶輸入了內容但沒有匹配項，將輸入值作為選項提供
+        if (search.length > 0 && choices.length === 0) {
+          choices.push({
+            name: `${focusedOption.value} (自定義項目名稱)`,
+            value: focusedOption.value,
+          });
+        }
+
         await interaction.respond(choices.slice(0, 25));
       } catch (error) {
         console.error("Error in compose project autocomplete:", error);
@@ -770,6 +832,14 @@ module.exports = {
           await interaction.respond([
             {
               name: `${search} (文件路徑)`,
+              value: search,
+            },
+          ]);
+        } else if (search.length > 0) {
+          // 如果有輸入內容，至少提供它作為選項
+          await interaction.respond([
+            {
+              name: `${search} (自定義項目名稱)`,
               value: search,
             },
           ]);
