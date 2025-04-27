@@ -318,10 +318,109 @@ async function getContainerLogs(containerId, lines = 100) {
   }
 }
 
+/**
+ * Pull a Docker image from registry
+ * @param {string} imageName - Name of the image to pull (e.g. "ubuntu:latest")
+ * @returns {Promise<Object>} Result of the pull operation
+ */
+async function pullImage(imageName) {
+  try {
+    console.log(`Pulling Docker image: ${imageName}`);
+    
+    // Create a Promise to handle the Docker pull stream
+    return new Promise((resolve, reject) => {
+      docker.pull(imageName, (err, stream) => {
+        if (err) {
+          console.error(`Error initiating pull for ${imageName}:`, err);
+          return reject(err);
+        }
+        
+        // Track progress information
+        let pullProgress = {
+          status: 'Pulling',
+          details: {},
+          errors: []
+        };
+        
+        // Process the stream data
+        docker.modem.followProgress(
+          stream,
+          // Callback when pull is complete
+          (err, output) => {
+            if (err) {
+              console.error(`Error pulling image ${imageName}:`, err);
+              pullProgress.status = 'Failed';
+              pullProgress.errors.push(err.message);
+              return reject(err);
+            }
+            
+            console.log(`Successfully pulled image: ${imageName}`);
+            pullProgress.status = 'Complete';
+            resolve({
+              image: imageName,
+              success: true,
+              progress: pullProgress
+            });
+          },
+          // Progress callback
+          (event) => {
+            if (event.status) {
+              // Update progress information
+              const progressId = event.id || 'unknown';
+              pullProgress.details[progressId] = {
+                status: event.status,
+                progress: event.progress || '',
+                details: event
+              };
+              
+              // Log progress for debugging
+              if (event.progress) {
+                console.log(`${event.id || ''}: ${event.status} ${event.progress}`);
+              }
+            }
+            
+            // Handle error in the stream
+            if (event.error) {
+              pullProgress.errors.push(event.error);
+              console.error(`Error in pull stream for ${imageName}:`, event.error);
+            }
+          }
+        );
+      });
+    });
+  } catch (error) {
+    console.error(`Error pulling Docker image ${imageName}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * List all Docker images
+ * @returns {Promise<Array>} List of images
+ */
+async function listImages() {
+  try {
+    const images = await docker.listImages();
+    
+    return images.map(image => ({
+      id: image.Id.replace('sha256:', '').substring(0, 12),
+      repoTags: image.RepoTags || ['<none>:<none>'],
+      created: new Date(image.Created * 1000).toISOString(),
+      size: (image.Size / (1024 * 1024)).toFixed(2),
+      virtualSize: (image.VirtualSize / (1024 * 1024)).toFixed(2),
+    }));
+  } catch (error) {
+    console.error('Error listing images:', error);
+    throw error;
+  }
+}
+
 module.exports = {
   listContainers,
   getContainerInfo,
   controlContainer,
   getDockerInfo,
   getContainerLogs,
+  pullImage,
+  listImages,
 };

@@ -158,7 +158,29 @@ module.exports = {
           await interaction.deferUpdate();
           const dockerInfo = await dockerMonitor.getDockerInfo();
           const embed = embedBuilder.createDockerInfoEmbed(dockerInfo);
-          await interaction.editReply({ embeds: [embed] });
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_docker_info")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          const dockerContainers = new ButtonBuilder()
+            .setCustomId("docker_containers")
+            .setLabel("Docker Containers")
+            .setStyle(ButtonStyle.Secondary);
+
+          const dockerImages = new ButtonBuilder()
+            .setCustomId("docker_images")
+            .setLabel("Docker Images")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            dockerContainers,
+            dockerImages
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
         }
 
         // Container list refresh button
@@ -167,6 +189,65 @@ module.exports = {
           const containers = await dockerMonitor.listContainers(true);
           const embed = embedBuilder.createContainerListEmbed(containers);
           await interaction.editReply({ embeds: [embed] });
+        }
+
+        // Docker images list refresh button
+        else if (customId === "refresh_images") {
+          await interaction.deferUpdate();
+          const images = await dockerMonitor.listImages();
+          const embed = embedBuilder.createImageListEmbed(images);
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_images")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          const pullButton = new ButtonBuilder()
+            .setCustomId("show_pull_modal")
+            .setLabel("Pull Image")
+            .setStyle(ButtonStyle.Success);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            pullButton
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+
+        // Show Docker images list
+        else if (customId === "docker_images") {
+          await interaction.deferUpdate();
+          const images = await dockerMonitor.listImages();
+          const embed = embedBuilder.createImageListEmbed(images);
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_images")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
+
+          const pullButton = new ButtonBuilder()
+            .setCustomId("show_pull_modal")
+            .setLabel("Pull Image")
+            .setStyle(ButtonStyle.Success);
+
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            pullButton
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+
+        // Show pull image modal/form
+        else if (customId === "show_pull_modal") {
+          // We can't show an actual modal through a button interaction
+          // Instead, suggest the user to use the /docker pull command
+          await interaction.reply({
+            content:
+              "Please use the `/docker pull` command to pull an image. For example: `/docker pull ubuntu:latest`",
+            ephemeral: true,
+          });
         }
 
         // Container detail actions
@@ -445,9 +526,16 @@ module.exports = {
             .setLabel("Docker Info")
             .setStyle(ButtonStyle.Secondary);
 
+          // Create the Docker Images button
+          const dockerImagesButton = new ButtonBuilder()
+            .setCustomId("docker_images")
+            .setLabel("Docker Images")
+            .setStyle(ButtonStyle.Secondary);
+
           const row = new ActionRowBuilder().addComponents(
             refreshButton,
-            dockerInfoButton
+            dockerInfoButton,
+            dockerImagesButton
           );
 
           // Create the select menu for container actions if we have containers
@@ -506,9 +594,15 @@ module.exports = {
             .setLabel("Docker Containers")
             .setStyle(ButtonStyle.Secondary);
 
+          const dockerImages = new ButtonBuilder()
+            .setCustomId("docker_images")
+            .setLabel("Docker Images")
+            .setStyle(ButtonStyle.Secondary);
+
           const row = new ActionRowBuilder().addComponents(
             refreshButton,
-            dockerContainers
+            dockerContainers,
+            dockerImages
           );
 
           await interaction.editReply({ embeds: [embed], components: [row] });

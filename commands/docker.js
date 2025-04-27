@@ -111,6 +111,20 @@ module.exports = {
               { name: "Restart", value: "restart" }
             )
         )
+    )
+    .addSubcommand((subcommand) =>
+      subcommand.setName("images").setDescription("List all Docker images")
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("pull")
+        .setDescription("Pull a Docker image from registry")
+        .addStringOption((option) =>
+          option
+            .setName("image")
+            .setDescription("Image name and tag (e.g. ubuntu:latest)")
+            .setRequired(true)
+        )
     ),
 
   async execute(interaction) {
@@ -243,6 +257,78 @@ module.exports = {
           content: `Successfully ${action}ed container \`${result.name}\` (${result.id}). Current status: ${result.status}`,
           components: [],
         });
+      } else if (subcommand === "images") {
+        // List all Docker images
+        const images = await dockerMonitor.listImages();
+        const embed = embedBuilder.createImageListEmbed(images);
+
+        const refreshButton = new ButtonBuilder()
+          .setCustomId("refresh_images")
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Primary);
+
+        const pullButton = new ButtonBuilder()
+          .setCustomId("show_pull_modal")
+          .setLabel("Pull Image")
+          .setStyle(ButtonStyle.Success);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          pullButton
+        );
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      } else if (subcommand === "pull") {
+        // Pull a Docker image
+        const imageName = interaction.options.getString("image");
+
+        // Send initial response
+        await interaction.editReply({
+          content: `🔄 Pulling Docker image \`${imageName}\`... This may take a while depending on the image size.`,
+          components: [],
+        });
+
+        try {
+          // Execute the pull operation
+          const pullResult = await dockerMonitor.pullImage(imageName);
+
+          // Create an embed with the result
+          const embed = embedBuilder.createImagePullEmbed(pullResult);
+
+          // Create refresh buttons
+          const viewImagesButton = new ButtonBuilder()
+            .setCustomId("docker_images")
+            .setLabel("View All Images")
+            .setStyle(ButtonStyle.Primary);
+
+          const row = new ActionRowBuilder().addComponents(viewImagesButton);
+
+          // Update reply with the result
+          await interaction.editReply({
+            content: null,
+            embeds: [embed],
+            components: [row],
+          });
+        } catch (error) {
+          console.error(`Error pulling image ${imageName}:`, error);
+
+          // Create an embed for the error
+          const embed = new EmbedBuilder()
+            .setColor("#FF0000")
+            .setTitle(`Docker Image Pull Failed: ${imageName}`)
+            .setDescription(`❌ Failed to pull image \`${imageName}\``)
+            .addFields({
+              name: "Error",
+              value: error.message || "Unknown error occurred",
+            })
+            .setTimestamp();
+
+          await interaction.editReply({
+            content: null,
+            embeds: [embed],
+            components: [],
+          });
+        }
       }
     } catch (error) {
       console.error("Error in docker command:", error);

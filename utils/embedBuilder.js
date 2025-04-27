@@ -376,6 +376,112 @@ function createContainerLogsEmbed(containerId, containerName, logs) {
   return embed;
 }
 
+/**
+ * Create an embed for Docker image list
+ * @param {Array} images - List of Docker images from dockerMonitor.js
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createImageListEmbed(images) {
+  const embed = new EmbedBuilder()
+    .setColor("#2496ED") // Docker blue
+    .setTitle("Docker Images")
+    .setDescription(`Total images: ${images.length}`)
+    .setTimestamp();
+
+  if (images.length === 0) {
+    embed.setDescription("No Docker images found.");
+    return embed;
+  }
+
+  // Group images with multiple tags
+  const groupedImages = {};
+
+  images.forEach((image) => {
+    const mainTag = image.repoTags[0];
+    if (!groupedImages[mainTag]) {
+      groupedImages[mainTag] = image;
+    }
+  });
+
+  // Format the image list
+  let imageList = "";
+  let count = 0;
+
+  Object.values(groupedImages).forEach((image) => {
+    if (count < 15) {
+      // Limit to 15 images to avoid embed limits
+      const name =
+        image.repoTags[0] !== "<none>:<none>"
+          ? image.repoTags[0]
+          : `<none> (${image.id})`;
+
+      imageList += `**${count + 1}.** \`${name}\`\n`;
+      imageList += `   ID: ${image.id} | Size: ${
+        image.size
+      } MB | Created: ${new Date(image.created).toLocaleDateString()}\n`;
+
+      // Show additional tags if any
+      if (image.repoTags.length > 1) {
+        imageList += `   Also tagged as: ${image.repoTags
+          .slice(1, 3)
+          .map((tag) => `\`${tag}\``)
+          .join(", ")}`;
+        if (image.repoTags.length > 3) {
+          imageList += ` and ${image.repoTags.length - 3} more`;
+        }
+        imageList += "\n";
+      }
+
+      imageList += "\n";
+      count++;
+    }
+  });
+
+  if (Object.keys(groupedImages).length > 15) {
+    imageList += `... and ${
+      Object.keys(groupedImages).length - 15
+    } more images\n`;
+  }
+
+  embed.setDescription(imageList || "No image information available");
+  return embed;
+}
+
+/**
+ * Create an embed for Docker image pull status
+ * @param {Object} pullResult - Result from pullImage function
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createImagePullEmbed(pullResult) {
+  const embed = new EmbedBuilder()
+    .setColor(pullResult.success ? "#2496ED" : "#FF0000") // Docker blue or red for error
+    .setTitle(`Docker Image Pull: ${pullResult.image}`)
+    .setTimestamp();
+
+  if (pullResult.success) {
+    embed.setDescription(
+      `✅ Successfully pulled image \`${pullResult.image}\``
+    );
+  } else {
+    embed.setDescription(`❌ Failed to pull image \`${pullResult.image}\``);
+
+    // Add error details if available
+    if (
+      pullResult.progress &&
+      pullResult.progress.errors &&
+      pullResult.progress.errors.length > 0
+    ) {
+      embed.addFields({
+        name: "Errors",
+        value:
+          pullResult.progress.errors.slice(0, 3).join("\n") || "Unknown error",
+      });
+    }
+  }
+
+  return embed;
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -384,4 +490,6 @@ module.exports = {
   createContainerListEmbed,
   createContainerDetailsEmbed,
   createContainerLogsEmbed,
+  createImageListEmbed,
+  createImagePullEmbed,
 };
