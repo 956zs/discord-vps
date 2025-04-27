@@ -176,6 +176,66 @@ module.exports = {
 
           if (action === "start" || action === "stop" || action === "restart") {
             await interaction.deferUpdate();
+
+            // For stop action, show confirmation dialog
+            if (action === "stop") {
+              const containerInfo = await dockerMonitor.getContainerInfo(
+                containerId
+              );
+
+              // Create confirmation buttons
+              const confirmButton = new ButtonBuilder()
+                .setCustomId(`confirm_stop_${containerId}`)
+                .setLabel("Confirm Stop")
+                .setStyle(ButtonStyle.Danger);
+
+              const cancelButton = new ButtonBuilder()
+                .setCustomId(`cancel_stop_${containerId}`)
+                .setLabel("Cancel")
+                .setStyle(ButtonStyle.Secondary);
+
+              const row = new ActionRowBuilder().addComponents(
+                confirmButton,
+                cancelButton
+              );
+
+              await interaction.editReply({
+                content: `Are you sure you want to stop container \`${containerInfo.name}\`? This may cause service interruption.`,
+                components: [row],
+              });
+              return;
+            }
+
+            // For restart action, show confirmation dialog
+            if (action === "restart") {
+              const containerInfo = await dockerMonitor.getContainerInfo(
+                containerId
+              );
+
+              // Create confirmation buttons
+              const confirmButton = new ButtonBuilder()
+                .setCustomId(`confirm_restart_${containerId}`)
+                .setLabel("Confirm Restart")
+                .setStyle(ButtonStyle.Danger);
+
+              const cancelButton = new ButtonBuilder()
+                .setCustomId(`cancel_restart_${containerId}`)
+                .setLabel("Cancel")
+                .setStyle(ButtonStyle.Secondary);
+
+              const row = new ActionRowBuilder().addComponents(
+                confirmButton,
+                cancelButton
+              );
+
+              await interaction.editReply({
+                content: `Are you sure you want to restart container \`${containerInfo.name}\`? This may cause service interruption.`,
+                components: [row],
+              });
+              return;
+            }
+
+            // For start action, proceed directly
             await dockerMonitor.controlContainer(containerId, action);
 
             // Refresh the container details
@@ -185,31 +245,47 @@ module.exports = {
             const embed =
               embedBuilder.createContainerDetailsEmbed(containerInfo);
 
-            // Update button states
-            const startButton =
-              interaction.message.components[0].components.find(
-                (c) => c.customId === `container_start_${containerId}`
-              );
-            if (startButton)
-              startButton.setDisabled(containerInfo.state.running);
+            // Create new buttons with updated states
+            const startButton = new ButtonBuilder()
+              .setCustomId(`container_start_${containerInfo.id}`)
+              .setLabel("Start")
+              .setStyle(ButtonStyle.Success)
+              .setDisabled(containerInfo.state.running);
 
-            const stopButton =
-              interaction.message.components[0].components.find(
-                (c) => c.customId === `container_stop_${containerId}`
-              );
-            if (stopButton)
-              stopButton.setDisabled(!containerInfo.state.running);
+            const stopButton = new ButtonBuilder()
+              .setCustomId(`container_stop_${containerInfo.id}`)
+              .setLabel("Stop")
+              .setStyle(ButtonStyle.Danger)
+              .setDisabled(!containerInfo.state.running);
 
-            const restartButton =
-              interaction.message.components[0].components.find(
-                (c) => c.customId === `container_restart_${containerId}`
-              );
-            if (restartButton)
-              restartButton.setDisabled(!containerInfo.state.running);
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`container_restart_${containerInfo.id}`)
+              .setLabel("Restart")
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(!containerInfo.state.running);
+
+            const logsButton = new ButtonBuilder()
+              .setCustomId(`container_logs_${containerInfo.id}`)
+              .setLabel("Logs")
+              .setStyle(ButtonStyle.Secondary);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId(`refresh_container_${containerInfo.id}`)
+              .setLabel("Refresh")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(
+              startButton,
+              stopButton,
+              restartButton,
+              logsButton,
+              refreshButton
+            );
 
             await interaction.editReply({
               embeds: [embed],
-              components: interaction.message.components,
+              components: [row],
+              content: null,
             });
           } else if (action === "logs") {
             await interaction.deferUpdate();
@@ -353,6 +429,256 @@ module.exports = {
           );
 
           await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+
+        // Handle stop confirmation
+        else if (customId.startsWith("confirm_stop_")) {
+          await interaction.deferUpdate();
+
+          const containerId = customId.replace("confirm_stop_", "");
+
+          try {
+            // Stop the container
+            await dockerMonitor.controlContainer(containerId, "stop");
+
+            // Get updated container info
+            const containerInfo = await dockerMonitor.getContainerInfo(
+              containerId
+            );
+            const embed =
+              embedBuilder.createContainerDetailsEmbed(containerInfo);
+
+            // Create new buttons with updated states
+            const startButton = new ButtonBuilder()
+              .setCustomId(`container_start_${containerInfo.id}`)
+              .setLabel("Start")
+              .setStyle(ButtonStyle.Success)
+              .setDisabled(containerInfo.state.running);
+
+            const stopButton = new ButtonBuilder()
+              .setCustomId(`container_stop_${containerInfo.id}`)
+              .setLabel("Stop")
+              .setStyle(ButtonStyle.Danger)
+              .setDisabled(!containerInfo.state.running);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`container_restart_${containerInfo.id}`)
+              .setLabel("Restart")
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(!containerInfo.state.running);
+
+            const logsButton = new ButtonBuilder()
+              .setCustomId(`container_logs_${containerInfo.id}`)
+              .setLabel("Logs")
+              .setStyle(ButtonStyle.Secondary);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId(`refresh_container_${containerInfo.id}`)
+              .setLabel("Refresh")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(
+              startButton,
+              stopButton,
+              restartButton,
+              logsButton,
+              refreshButton
+            );
+
+            // Reply with success message and updated container details
+            await interaction.editReply({
+              content: `Container \`${containerInfo.name}\` successfully stopped.`,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(`Error stopping container ${containerId}:`, error);
+            await interaction.editReply({
+              content: `Error stopping container: ${error.message}`,
+              components: [],
+              embeds: [],
+            });
+          }
+        }
+
+        // Handle stop cancellation
+        else if (customId.startsWith("cancel_stop_")) {
+          await interaction.deferUpdate();
+
+          const containerId = customId.replace("cancel_stop_", "");
+          const containerInfo = await dockerMonitor.getContainerInfo(
+            containerId
+          );
+          const embed = embedBuilder.createContainerDetailsEmbed(containerInfo);
+
+          // Create new buttons with updated states
+          const startButton = new ButtonBuilder()
+            .setCustomId(`container_start_${containerInfo.id}`)
+            .setLabel("Start")
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(containerInfo.state.running);
+
+          const stopButton = new ButtonBuilder()
+            .setCustomId(`container_stop_${containerInfo.id}`)
+            .setLabel("Stop")
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!containerInfo.state.running);
+
+          const restartButton = new ButtonBuilder()
+            .setCustomId(`container_restart_${containerInfo.id}`)
+            .setLabel("Restart")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(!containerInfo.state.running);
+
+          const logsButton = new ButtonBuilder()
+            .setCustomId(`container_logs_${containerInfo.id}`)
+            .setLabel("Logs")
+            .setStyle(ButtonStyle.Secondary);
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId(`refresh_container_${containerInfo.id}`)
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            startButton,
+            stopButton,
+            restartButton,
+            logsButton,
+            refreshButton
+          );
+
+          // Reply with cancellation message
+          await interaction.editReply({
+            content: `Stop operation cancelled for container \`${containerInfo.name}\`.`,
+            embeds: [embed],
+            components: [row],
+          });
+        }
+
+        // Handle restart confirmation
+        else if (customId.startsWith("confirm_restart_")) {
+          await interaction.deferUpdate();
+
+          const containerId = customId.replace("confirm_restart_", "");
+
+          try {
+            // Restart the container
+            await dockerMonitor.controlContainer(containerId, "restart");
+
+            // Get updated container info
+            const containerInfo = await dockerMonitor.getContainerInfo(
+              containerId
+            );
+            const embed =
+              embedBuilder.createContainerDetailsEmbed(containerInfo);
+
+            // Create new buttons with updated states
+            const startButton = new ButtonBuilder()
+              .setCustomId(`container_start_${containerInfo.id}`)
+              .setLabel("Start")
+              .setStyle(ButtonStyle.Success)
+              .setDisabled(containerInfo.state.running);
+
+            const stopButton = new ButtonBuilder()
+              .setCustomId(`container_stop_${containerInfo.id}`)
+              .setLabel("Stop")
+              .setStyle(ButtonStyle.Danger)
+              .setDisabled(!containerInfo.state.running);
+
+            const restartButton = new ButtonBuilder()
+              .setCustomId(`container_restart_${containerInfo.id}`)
+              .setLabel("Restart")
+              .setStyle(ButtonStyle.Primary)
+              .setDisabled(!containerInfo.state.running);
+
+            const logsButton = new ButtonBuilder()
+              .setCustomId(`container_logs_${containerInfo.id}`)
+              .setLabel("Logs")
+              .setStyle(ButtonStyle.Secondary);
+
+            const refreshButton = new ButtonBuilder()
+              .setCustomId(`refresh_container_${containerInfo.id}`)
+              .setLabel("Refresh")
+              .setStyle(ButtonStyle.Secondary);
+
+            const row = new ActionRowBuilder().addComponents(
+              startButton,
+              stopButton,
+              restartButton,
+              logsButton,
+              refreshButton
+            );
+
+            // Reply with success message and updated container details
+            await interaction.editReply({
+              content: `Container \`${containerInfo.name}\` successfully restarted.`,
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error(`Error restarting container ${containerId}:`, error);
+            await interaction.editReply({
+              content: `Error restarting container: ${error.message}`,
+              components: [],
+              embeds: [],
+            });
+          }
+        }
+
+        // Handle restart cancellation
+        else if (customId.startsWith("cancel_restart_")) {
+          await interaction.deferUpdate();
+
+          const containerId = customId.replace("cancel_restart_", "");
+          const containerInfo = await dockerMonitor.getContainerInfo(
+            containerId
+          );
+          const embed = embedBuilder.createContainerDetailsEmbed(containerInfo);
+
+          // Create new buttons with updated states
+          const startButton = new ButtonBuilder()
+            .setCustomId(`container_start_${containerInfo.id}`)
+            .setLabel("Start")
+            .setStyle(ButtonStyle.Success)
+            .setDisabled(containerInfo.state.running);
+
+          const stopButton = new ButtonBuilder()
+            .setCustomId(`container_stop_${containerInfo.id}`)
+            .setLabel("Stop")
+            .setStyle(ButtonStyle.Danger)
+            .setDisabled(!containerInfo.state.running);
+
+          const restartButton = new ButtonBuilder()
+            .setCustomId(`container_restart_${containerInfo.id}`)
+            .setLabel("Restart")
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(!containerInfo.state.running);
+
+          const logsButton = new ButtonBuilder()
+            .setCustomId(`container_logs_${containerInfo.id}`)
+            .setLabel("Logs")
+            .setStyle(ButtonStyle.Secondary);
+
+          const refreshButton = new ButtonBuilder()
+            .setCustomId(`refresh_container_${containerInfo.id}`)
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            startButton,
+            stopButton,
+            restartButton,
+            logsButton,
+            refreshButton
+          );
+
+          // Reply with cancellation message
+          await interaction.editReply({
+            content: `Restart operation cancelled for container \`${containerInfo.name}\`.`,
+            embeds: [embed],
+            components: [row],
+          });
         }
       } catch (error) {
         console.error("Error handling button interaction:", error);
