@@ -426,10 +426,12 @@ async function listImages() {
  */
 async function listComposeProjects() {
   try {
+    // 正確引入 util.promisify
+    const util = require("util");
+    const exec = util.promisify(require("child_process").exec);
+
     // 使用 docker compose ls 命令獲取所有 compose 項目
-    const { stdout } = await require("child_process").promisify(
-      require("child_process").exec
-    )("docker compose ls --format json");
+    const { stdout } = await exec("docker compose ls --format json");
 
     // 解析JSON輸出
     let projects = [];
@@ -469,6 +471,11 @@ async function listComposeProjects() {
  */
 async function getComposeProjectDetails(projectName) {
   try {
+    // 正確引入 util.promisify
+    const util = require("util");
+    const exec = util.promisify(require("child_process").exec);
+    const path = require("path");
+
     // 檢查是否為路徑
     const isPath = projectName.includes("/");
 
@@ -478,9 +485,9 @@ async function getComposeProjectDetails(projectName) {
       : `--project-name ${projectName}`;
 
     // 獲取項目配置
-    const { stdout: configOutput } = await require("child_process").promisify(
-      require("child_process").exec
-    )(`docker compose ${workingDirArg} config --format json`);
+    const { stdout: configOutput } = await exec(
+      `docker compose ${workingDirArg} config --format json`
+    );
 
     // 解析配置
     let config = {};
@@ -491,9 +498,9 @@ async function getComposeProjectDetails(projectName) {
     }
 
     // 獲取服務狀態
-    const { stdout: psOutput } = await require("child_process").promisify(
-      require("child_process").exec
-    )(`docker compose ${workingDirArg} ps --format json`);
+    const { stdout: psOutput } = await exec(
+      `docker compose ${workingDirArg} ps --format json`
+    );
 
     // 解析服務狀態
     let services = [];
@@ -565,6 +572,9 @@ async function getComposeProjectDetails(projectName) {
  */
 async function pullComposeImages(projectNameOrPath) {
   try {
+    // 導入必要的模組
+    const child_process = require("child_process");
+
     // 檢查是否為路徑
     const isPath = projectNameOrPath.includes("/");
 
@@ -574,7 +584,7 @@ async function pullComposeImages(projectNameOrPath) {
       : `--project-name ${projectNameOrPath}`;
 
     // 執行 pull 命令
-    const childProcess = require("child_process").spawn(
+    const childProcess = child_process.spawn(
       "docker",
       ["compose", ...workingDirArg.split(" "), "pull"],
       {
@@ -642,6 +652,9 @@ async function controlComposeProject(
   detached = true
 ) {
   try {
+    // 導入必要的模組
+    const child_process = require("child_process");
+
     // 檢查是否為路徑
     const isPath = projectNameOrPath.includes("/");
 
@@ -678,7 +691,7 @@ async function controlComposeProject(
     }
 
     // 執行命令
-    const childProcess = require("child_process").spawn("docker", command, {
+    const childProcess = child_process.spawn("docker", command, {
       shell: true,
     });
 
