@@ -503,9 +503,18 @@ function createComposeProjectsListEmbed(projects) {
   projects.forEach((project, index) => {
     projectsList += `**${index + 1}.** \`${project.name}\`\n`;
     projectsList += `   💡 狀態: ${project.status}\n`;
-    if (project.configFiles && project.configFiles.length > 0) {
-      projectsList += `   📁 配置檔案: ${project.configFiles.join(", ")}\n`;
+
+    // 確保 configFiles 是一個數組
+    if (project.configFiles) {
+      const configFilesArray = Array.isArray(project.configFiles)
+        ? project.configFiles
+        : [project.configFiles];
+
+      if (configFilesArray.length > 0 && configFilesArray[0]) {
+        projectsList += `   📁 配置檔案: ${configFilesArray.join(", ")}\n`;
+      }
     }
+
     if (project.workingDir) {
       projectsList += `   📂 工作目錄: ${project.workingDir}\n`;
     }

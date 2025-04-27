@@ -426,38 +426,46 @@ async function listImages() {
  */
 async function listComposeProjects() {
   try {
-    // 正確引入 util.promisify
-    const util = require("util");
-    const exec = util.promisify(require("child_process").exec);
+    // 使用更簡單的方法獲取 Docker Compose 項目列表
+    const child_process = require("child_process");
 
-    // 使用 docker compose ls 命令獲取所有 compose 項目
-    const { stdout } = await exec("docker compose ls --format json");
+    return new Promise((resolve, reject) => {
+      // 使用命令行獲取項目列表
+      child_process.exec("docker compose ls", (error, stdout, stderr) => {
+        if (error) {
+          console.error("Error executing docker compose ls:", error);
+          reject(error);
+          return;
+        }
 
-    // 解析JSON輸出
-    let projects = [];
-    try {
-      projects = JSON.parse(stdout);
-    } catch (e) {
-      // 如果JSON解析失敗，嘗試逐行解析
-      projects = stdout
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => {
-          try {
-            return JSON.parse(line);
-          } catch (e) {
-            return null;
-          }
-        })
-        .filter((item) => item !== null);
-    }
+        if (stderr) {
+          console.warn("Warning from docker compose ls:", stderr);
+        }
 
-    return projects.map((project) => ({
-      name: project.Name,
-      status: project.Status || "unknown",
-      configFiles: project.ConfigFiles || [],
-      workingDir: project.WorkingDir || "",
-    }));
+        // 解析命令行輸出
+        const lines = stdout.trim().split("\n");
+        if (lines.length <= 1) {
+          // 只有標題行或沒有輸出
+          resolve([]);
+          return;
+        }
+
+        // 跳過標題行
+        const projectLines = lines.slice(1);
+        const projects = projectLines.map((line) => {
+          const parts = line.trim().split(/\s{2,}/);
+          // 通常格式是: NAME STATUS CONFIG FILES
+          return {
+            name: parts[0] || "unknown",
+            status: parts[1] || "unknown",
+            configFiles: parts[2] || "",
+            workingDir: parts[3] || "",
+          };
+        });
+
+        resolve(projects);
+      });
+    });
   } catch (error) {
     console.error("Error listing Docker Compose projects:", error);
     throw error;
@@ -471,91 +479,125 @@ async function listComposeProjects() {
  */
 async function getComposeProjectDetails(projectName) {
   try {
-    // 正確引入 util.promisify
-    const util = require("util");
-    const exec = util.promisify(require("child_process").exec);
+    const child_process = require("child_process");
     const path = require("path");
 
     // 檢查是否為路徑
     const isPath = projectName.includes("/");
 
-    // 設置工作目錄參數
-    const workingDirArg = isPath
-      ? `-f "${projectName}"`
-      : `--project-name ${projectName}`;
+    // 使用更直接的方式獲取項目詳情
+    return new Promise((resolve, reject) => {
+      // 設置工作目錄參數
+      const workingDirArg = isPath
+        ? `-f "${projectName}"`
+        : `--project-name ${projectName}`;
 
-    // 獲取項目配置
-    const { stdout: configOutput } = await exec(
-      `docker compose ${workingDirArg} config --format json`
-    );
-
-    // 解析配置
-    let config = {};
-    try {
-      config = JSON.parse(configOutput);
-    } catch (e) {
-      throw new Error(`無法解析 Docker Compose 配置: ${e.message}`);
-    }
-
-    // 獲取服務狀態
-    const { stdout: psOutput } = await exec(
-      `docker compose ${workingDirArg} ps --format json`
-    );
-
-    // 解析服務狀態
-    let services = [];
-    try {
-      services = JSON.parse(psOutput);
-      // 處理可能的單行 JSON 輸出
-      if (!Array.isArray(services)) {
-        services = [services];
-      }
-    } catch (e) {
-      // 嘗試逐行解析
-      services = psOutput
-        .split("\n")
-        .filter((line) => line.trim())
-        .map((line) => {
-          try {
-            return JSON.parse(line);
-          } catch (e) {
-            return null;
+      // 獲取服務列表
+      child_process.exec(
+        `docker compose ${workingDirArg} ps`,
+        (error, stdout, stderr) => {
+          if (error) {
+            console.error(
+              `Error executing docker compose ps for ${projectName}:`,
+              error
+            );
+            reject(error);
+            return;
           }
-        })
-        .filter((item) => item !== null);
-    }
 
-    // 將配置和狀態整合
-    const projectServices = Object.keys(config.services || {}).map(
-      (serviceName) => {
-        const serviceConfig = config.services[serviceName];
-        const serviceStatus = services.find(
-          (s) => s.Service === serviceName || s.Name?.includes(serviceName)
-        );
+          if (stderr) {
+            console.warn(
+              `Warning from docker compose ps for ${projectName}:`,
+              stderr
+            );
+          }
 
-        return {
-          name: serviceName,
-          image: serviceConfig.image || "custom build",
-          status: serviceStatus ? serviceStatus.State : "not created",
-          health: serviceStatus ? serviceStatus.Health || "N/A" : "N/A",
-          ports: serviceConfig.ports || [],
-          depends_on: serviceConfig.depends_on || [],
-        };
-      }
-    );
+          // 解析服務狀態
+          const lines = stdout.trim().split("\n");
+          if (lines.length <= 1) {
+            // 項目可能存在但沒有運行中的服務
+            resolve({
+              name: projectName,
+              workingDir: isPath ? path.dirname(projectName) : "",
+              file: isPath ? path.basename(projectName) : "docker-compose.yml",
+              services: [],
+              networks: [],
+              volumes: [],
+            });
+            return;
+          }
 
-    return {
-      name: isPath ? projectName : config.name || projectName,
-      workingDir: isPath
-        ? require("path").dirname(projectName)
-        : config.workingDir || "",
-      file: isPath
-        ? require("path").basename(projectName)
-        : "docker-compose.yml",
-      services: projectServices,
-      networks: Object.keys(config.networks || {}),
-      volumes: Object.keys(config.volumes || {}),
-    };
+          // 解析服務信息
+          const serviceLines = lines.slice(1); // 跳過標題行
+          const services = serviceLines.map((line) => {
+            const parts = line.trim().split(/\s{2,}/);
+            // 格式通常是: NAME SERVICE STATUS PORTS
+            return {
+              name: parts[1] || parts[0] || "unknown",
+              status: parts[2] || "unknown",
+              health: parts[3] || "N/A",
+              image: "N/A", // 這個信息在簡單模式下無法獲取
+              ports: [],
+              depends_on: [],
+            };
+          });
+
+          // 嘗試獲取額外的網絡和卷信息
+          child_process.exec(
+            `docker compose ${workingDirArg} config --format json`,
+            (error, stdout, stderr) => {
+              let config = {};
+              let networks = [];
+              let volumes = [];
+
+              if (!error && stdout) {
+                try {
+                  config = JSON.parse(stdout);
+
+                  // 更新服務信息
+                  if (config.services) {
+                    Object.keys(config.services).forEach((serviceName) => {
+                      const serviceConfig = config.services[serviceName];
+                      const service = services.find(
+                        (s) => s.name === serviceName
+                      );
+
+                      if (service) {
+                        service.image = serviceConfig.image || "custom build";
+                        service.ports = serviceConfig.ports || [];
+                        service.depends_on = serviceConfig.depends_on || [];
+                      }
+                    });
+                  }
+
+                  // 獲取網絡和卷
+                  networks = Object.keys(config.networks || {});
+                  volumes = Object.keys(config.volumes || {});
+                } catch (e) {
+                  console.error(
+                    `Error parsing Docker Compose config for ${projectName}:`,
+                    e
+                  );
+                }
+              }
+
+              resolve({
+                name: isPath ? projectName : config.name || projectName,
+                workingDir: isPath
+                  ? path.dirname(projectName)
+                  : config.workingDir || "",
+                file: isPath
+                  ? path.basename(projectName)
+                  : "docker-compose.yml",
+                services: services,
+                networks: networks,
+                volumes: volumes,
+              });
+            }
+          );
+        }
+      );
+    });
   } catch (error) {
     console.error(
       `Error getting Docker Compose project details for ${projectName}:`,
