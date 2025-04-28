@@ -341,59 +341,70 @@ async function getStatus() {
  */
 async function getExitNodesList() {
   try {
-    console.log("[getExitNodesList] 嘗試使用專用 API 獲取 Exit Nodes 列表");
+    console.log("[getExitNodesList] Attempting to get exit nodes list");
 
-    // Try the command with JSON output first
+    // Use the correct command: exit-node list (not exit-nodes)
+    // and don't use the --json flag since it's not supported
     let output;
     try {
-      output = executeTailscaleCommand("exit-nodes", { args: "list --json" });
-    } catch (jsonError) {
+      output = executeTailscaleCommand("exit-node", { args: "list" });
+    } catch (error) {
       console.log(
-        "[getExitNodesList] JSON output failed, trying without --json flag:",
-        jsonError.message
+        "[getExitNodesList] Exit node list command failed:",
+        error.message
       );
-      // Fall back to non-JSON format if necessary
-      output = executeTailscaleCommand("exit-nodes", { args: "list" });
+      return [];
     }
 
-    // Process the output based on format
+    // Process the text output since it's not JSON
     let exitNodes = [];
-    try {
-      // Try to parse as JSON
-      exitNodes = JSON.parse(output);
-      console.log(
-        `[getExitNodesList] Successfully parsed JSON, found ${exitNodes.length} exit nodes`
-      );
-    } catch (jsonParseError) {
-      console.log(
-        "[getExitNodesList] Not JSON format, parsing text output:",
-        jsonParseError.message
-      );
 
-      // Parse text format output
-      const lines = output
-        .split("\n")
-        .filter((line) => line.trim().length > 0)
-        .filter((line) => !line.includes("No exit nodes available"));
+    // Parse text format output
+    const lines = output
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .filter((line) => !line.includes("No exit nodes available"));
 
-      if (lines.length > 1) {
-        // Assume first line is header
-        const dataLines = lines.slice(1);
-        dataLines.forEach((line) => {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length >= 2) {
-            exitNodes.push({
-              hostname: parts[1], // The hostname is typically in the second column
-              ip: parts[0], // The IP is typically in the first column
-              online: true, // Assume listed nodes are online
-            });
+    console.log("[getExitNodesList] Raw output lines:", lines.length);
+
+    if (lines.length > 0) {
+      // Check if there's a header row
+      const hasHeader =
+        lines[0].includes("IP") ||
+        lines[0].includes("NAME") ||
+        lines[0].toLowerCase().includes("hostname");
+
+      // Start from line 1 if there's a header, otherwise from line 0
+      const dataLines = hasHeader ? lines.slice(1) : lines;
+
+      dataLines.forEach((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          // Determine which part is IP and which is hostname based on format
+          let ip, hostname;
+
+          // First part looks like an IP address (has dots or colons)
+          if (parts[0].includes(".") || parts[0].includes(":")) {
+            ip = parts[0];
+            // The hostname might be the rest of the line combined
+            hostname = parts.slice(1).join(" ");
+          } else {
+            // Otherwise assume hostname first, then IP
+            hostname = parts[0];
+            ip = parts[1];
           }
-        });
 
-        console.log(
-          `[getExitNodesList] Parsed ${exitNodes.length} exit nodes from text`
-        );
-      }
+          exitNodes.push({
+            hostname: hostname,
+            ip: ip,
+            online: true, // Assume listed nodes are online
+          });
+        }
+      });
+
+      console.log(
+        `[getExitNodesList] Parsed ${exitNodes.length} exit nodes from text`
+      );
     }
 
     return exitNodes;
@@ -401,6 +412,33 @@ async function getExitNodesList() {
     console.error("[getExitNodesList] Failed to get exit nodes list:", error);
     return [];
   }
+}
+
+/**
+ * Extract the first valid IPv4 address from a string that might contain multiple IPs
+ * @param {string} ipString String containing one or more IP addresses
+ * @returns {string} The first IPv4 address, or the original string if no IPv4 is found
+ */
+function extractFirstIPv4(ipString) {
+  if (!ipString) return "";
+
+  // Look for IPv4 pattern (simple regex)
+  const ipv4Regex = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
+  const match = ipString.match(ipv4Regex);
+
+  if (match && match[0]) {
+    console.log(
+      `[extractFirstIPv4] Found IPv4 address: ${match[0]} from "${ipString}"`
+    );
+    return match[0];
+  }
+
+  // If no IPv4 found, try to get the first part before any comma or space
+  const firstPart = ipString.split(/[,\s]/)[0];
+  console.log(
+    `[extractFirstIPv4] No IPv4 match found, using first part: ${firstPart}`
+  );
+  return firstPart;
 }
 
 /**
@@ -466,11 +504,15 @@ async function enableExitNode(hostname, specifiedIp) {
 
     // If a specific IP was provided, use it directly
     if (specifiedIp) {
-      console.log(`[enableExitNode] Using provided IP address: ${specifiedIp}`);
+      // Extract first IPv4 address from potentially multiple addresses
+      const ipToUse = extractFirstIPv4(specifiedIp);
+      console.log(
+        `[enableExitNode] Using IP address: ${ipToUse} (extracted from: ${specifiedIp})`
+      );
 
       // Set up the exit node with the specified IP
       const output = executeTailscaleCommand("up", {
-        args: `--exit-node=${specifiedIp}`,
+        args: `--exit-node=${ipToUse}`,
         timeout: 15000,
       });
 
@@ -479,7 +521,7 @@ async function enableExitNode(hostname, specifiedIp) {
       return {
         success: true,
         message: `Successfully set ${hostname} as exit node`,
-        ip: specifiedIp,
+        ip: ipToUse,
         output: output,
       };
     }
@@ -557,8 +599,8 @@ async function enableExitNode(hostname, specifiedIp) {
       };
     }
 
-    // Extract the first IP if there are multiple
-    const exitNodeIP = peer.ip.split(",")[0].trim();
+    // Extract the first IPv4 address if there are multiple
+    const exitNodeIP = extractFirstIPv4(peer.ip);
     console.log(
       `[enableExitNode] Setting up exit node: ${hostname} with IP: ${exitNodeIP}`
     );
@@ -817,4 +859,5 @@ module.exports = {
   startTailscale,
   stopTailscale,
   getExitNodesList,
+  extractFirstIPv4,
 };
