@@ -298,16 +298,16 @@ module.exports = {
         const result = await tailscaleMonitor.disableExitNode();
         if (result.success) {
           const embed = embedBuilder.buildExitNodeEmbed("disabled");
-          await interaction.reply({ embeds: [embed] });
+          await interaction.editReply({ embeds: [embed] });
         } else {
-          await interaction.reply({
+          await interaction.editReply({
             content: "Failed to disable exit node. Please try again later.",
             ephemeral: true,
           });
         }
       } else if (action === "on") {
         if (!hostname) {
-          await interaction.reply({
+          await interaction.editReply({
             content: "Please provide a hostname to enable the exit node.",
             ephemeral: true,
           });
@@ -316,9 +316,9 @@ module.exports = {
         const result = await tailscaleMonitor.enableExitNode(hostname);
         if (result.success) {
           const embed = embedBuilder.buildExitNodeEmbed("enabled", hostname);
-          await interaction.reply({ embeds: [embed] });
+          await interaction.editReply({ embeds: [embed] });
         } else {
-          await interaction.reply({
+          await interaction.editReply({
             content: "Failed to enable exit node. Please try again later.",
             ephemeral: true,
           });
@@ -326,10 +326,18 @@ module.exports = {
       }
     } catch (error) {
       console.error("Error handling exit node:", error);
-      await interaction.reply({
-        content: "An error occurred while handling the exit node request.",
-        ephemeral: true,
-      });
+      // Check if the interaction has already been replied to
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: "An error occurred while handling the exit node request.",
+          ephemeral: true,
+        });
+      } else {
+        await interaction.editReply({
+          content: "An error occurred while handling the exit node request.",
+          ephemeral: true,
+        });
+      }
     }
   },
 
