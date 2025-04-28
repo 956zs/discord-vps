@@ -185,6 +185,23 @@ module.exports = {
       // If we couldn't defer the interaction, it might be expired - just return
       if (!deferred) return;
 
+      // Check if Tailscale command should handle this interaction
+      if (
+        customId === "refresh_tailscale_status" ||
+        customId === "tailscale_status" ||
+        customId === "refresh_tailscale_network" ||
+        customId === "tailscale_network_stats" ||
+        customId === "confirm_tailscale_stop" ||
+        customId === "cancel_tailscale_stop" ||
+        customId === "confirm_tailscale_start"
+      ) {
+        const tailscaleCommand = client.commands.get("tailscale");
+        if (tailscaleCommand && tailscaleCommand.handleInteraction) {
+          const handled = await tailscaleCommand.handleInteraction(interaction);
+          if (handled) return;
+        }
+      }
+
       // Now proceed with handling the specific button action
       // 檢查命令是否有自己的處理互動方法
       if (

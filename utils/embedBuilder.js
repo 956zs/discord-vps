@@ -1086,6 +1086,284 @@ function createDetailedFirewallRulesEmbed(detailedRules) {
   return embed;
 }
 
+/**
+ * Creates an embed for displaying Tailscale status
+ * @param {Object} statusData Tailscale status data
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createTailscaleStatusEmbed(statusData) {
+  const embed = new EmbedBuilder()
+    .setColor("#41BEE9") // Tailscale blue
+    .setTitle("🛰️ Tailscale Status")
+    .setTimestamp();
+
+  if (!statusData.success) {
+    embed
+      .setDescription("⚠️ Failed to retrieve Tailscale status")
+      .addFields({ name: "Error", value: statusData.error || "Unknown error" });
+    return embed;
+  }
+
+  // Self information
+  const self = statusData.self;
+  const exitNodeStatus = self.usingExitNode
+    ? `✅ Using exit node: \`${self.exitNodeIP}\``
+    : "❌ Not using an exit node";
+
+  embed
+    .setDescription(
+      `**Current Machine**: \`${self.hostname}\`\n${exitNodeStatus}`
+    )
+    .addFields(
+      {
+        name: "IP Address",
+        value: `\`${self.ip || "Unknown"}\``,
+        inline: true,
+      },
+      { name: "OS", value: self.os || "Unknown", inline: true },
+      {
+        name: "Exit Node Capability",
+        value: self.exitNode ? "✅ Enabled" : "❌ Disabled",
+        inline: true,
+      }
+    );
+
+  // Peers information
+  if (statusData.peers.length > 0) {
+    // Group peers by online status
+    const onlinePeers = statusData.peers.filter((p) => p.online);
+    const offlinePeers = statusData.peers.filter((p) => !p.online);
+
+    // Add online peers
+    if (onlinePeers.length > 0) {
+      const onlinePeersText = onlinePeers
+        .map((peer) => {
+          const exitNodeCapable = peer.exitNode ? "🌐" : "";
+          return (
+            `**${peer.hostname}** ${exitNodeCapable}\n` +
+            `└ IP: \`${peer.ip}\` | OS: ${peer.os}`
+          );
+        })
+        .join("\n\n");
+
+      embed.addFields({
+        name: `🟢 Online Peers (${onlinePeers.length})`,
+        value: onlinePeersText,
+      });
+    }
+
+    // Add offline peers (summarized)
+    if (offlinePeers.length > 0) {
+      const offlinePeersText = offlinePeers
+        .map((peer) => {
+          return `**${peer.hostname}** (Last seen: ${formatLastSeen(
+            peer.lastSeen
+          )})`;
+        })
+        .join("\n");
+
+      embed.addFields({
+        name: `⚪ Offline Peers (${offlinePeers.length})`,
+        value: offlinePeersText,
+      });
+    }
+  } else {
+    embed.addFields({ name: "Peers", value: "No peers found" });
+  }
+
+  embed.setFooter({
+    text: "Use /tailscale exit-node to control exit node functionality",
+  });
+  return embed;
+}
+
+/**
+ * Creates an embed for displaying Tailscale network statistics
+ * @param {Object} netStats Network statistics data
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createTailscaleNetStatsEmbed(netStats) {
+  const embed = new EmbedBuilder()
+    .setColor("#41BEE9") // Tailscale blue
+    .setTitle("📊 Tailscale Network Statistics")
+    .setTimestamp();
+
+  if (!netStats.success) {
+    embed
+      .setDescription("⚠️ Failed to retrieve network statistics")
+      .addFields({ name: "Error", value: netStats.error || "Unknown error" });
+    return embed;
+  }
+
+  // Extract ping information
+  let pingInfo = "No ping data available";
+  if (netStats.ping) {
+    // Parse the ping output to get min/avg/max/mdev
+    const pingMatch = netStats.ping.match(
+      /= ([0-9.]+)\/([0-9.]+)\/([0-9.]+)\/([0-9.]+)/
+    );
+    if (pingMatch) {
+      pingInfo = `Min: ${pingMatch[1]}ms | Avg: ${pingMatch[2]}ms | Max: ${pingMatch[3]}ms`;
+    } else {
+      pingInfo = netStats.ping.split("\n").slice(-3).join("\n");
+    }
+  }
+
+  // Extract basic traffic statistics
+  let trafficInfo = "No traffic data available";
+  if (netStats.interface) {
+    // Try to extract RX/TX bytes from interface output
+    const rxMatch = netStats.interface.match(
+      /RX packets [0-9]+ +bytes ([0-9]+)/
+    );
+    const txMatch = netStats.interface.match(
+      /TX packets [0-9]+ +bytes ([0-9]+)/
+    );
+
+    if (rxMatch && txMatch) {
+      trafficInfo = `📥 Received: ${formatBytes(
+        rxMatch[1]
+      )}\n📤 Transmitted: ${formatBytes(txMatch[1])}`;
+    } else {
+      // Alternate format for ip -s link
+      const rxBytesMatch = netStats.interface.match(/RX:.+bytes ([0-9]+)/);
+      const txBytesMatch = netStats.interface.match(/TX:.+bytes ([0-9]+)/);
+
+      if (rxBytesMatch && txBytesMatch) {
+        trafficInfo = `📥 Received: ${formatBytes(
+          rxBytesMatch[1]
+        )}\n📤 Transmitted: ${formatBytes(txBytesMatch[1])}`;
+      } else {
+        trafficInfo = netStats.interface.split("\n").slice(0, 5).join("\n");
+      }
+    }
+  }
+
+  // Add status information if available
+  if (netStats.status && netStats.status.success) {
+    const self = netStats.status.self;
+    const exitNodeStatus = self.usingExitNode
+      ? `✅ Using exit node: \`${self.exitNodeIP}\``
+      : "❌ Not using an exit node";
+
+    embed.setDescription(
+      `**Current Machine**: \`${self.hostname}\`\n${exitNodeStatus}`
+    );
+
+    // Add peer traffic if available
+    if (self.rxBytes || self.txBytes) {
+      const rxBytes = self.rxBytes ? formatBytes(self.rxBytes) : "0 B";
+      const txBytes = self.txBytes ? formatBytes(self.txBytes) : "0 B";
+
+      embed.addFields({
+        name: "📶 Tailscale Traffic",
+        value: `📥 Received: ${rxBytes}\n📤 Transmitted: ${txBytes}`,
+      });
+    }
+  }
+
+  embed.addFields(
+    { name: "🏓 Ping Statistics (8.8.8.8)", value: `\`\`\`${pingInfo}\`\`\`` },
+    { name: "🌐 Interface Traffic", value: `\`\`\`${trafficInfo}\`\`\`` }
+  );
+
+  return embed;
+}
+
+/**
+ * Creates an embed for Tailscale operation results
+ * @param {Object} result Operation result
+ * @param {string} operationType Type of operation
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createTailscaleOperationEmbed(result, operationType) {
+  const embed = new EmbedBuilder()
+    .setColor(result.success ? "#4CAF50" : "#F44336") // Green for success, red for error
+    .setTimestamp();
+
+  const operationNames = {
+    "enable-exit-node": "Enable Exit Node",
+    "disable-exit-node": "Disable Exit Node",
+    start: "Start Tailscale",
+    stop: "Stop Tailscale",
+  };
+
+  const title = operationNames[operationType] || "Tailscale Operation";
+  embed.setTitle(`${result.success ? "✅" : "❌"} ${title}`);
+
+  if (result.success) {
+    embed.setDescription(result.message || "Operation completed successfully");
+
+    // Add additional fields based on operation type
+    if (operationType === "enable-exit-node" && result.ip) {
+      embed.addFields({ name: "Exit Node IP", value: result.ip });
+    }
+  } else {
+    embed
+      .setDescription("Operation failed")
+      .addFields({ name: "Error", value: result.error || "Unknown error" });
+
+    // Add available hosts if applicable
+    if (result.availableHosts && result.availableHosts.length > 0) {
+      embed.addFields({
+        name: "Available Hosts",
+        value: result.availableHosts.join("\n"),
+      });
+    }
+
+    // Add suggestion if available
+    if (result.suggestion) {
+      embed.addFields({ name: "Suggestion", value: result.suggestion });
+    }
+  }
+
+  return embed;
+}
+
+/**
+ * Helper function to format bytes into human-readable form
+ * @param {number} bytes Bytes to format
+ * @returns {string} Formatted string
+ */
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 B";
+
+  bytes = parseInt(bytes);
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+
+  return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
+}
+
+/**
+ * Helper function to format last seen timestamp
+ * @param {string} isoDate ISO date string
+ * @returns {string} Formatted timestamp
+ */
+function formatLastSeen(isoDate) {
+  if (!isoDate) return "Unknown";
+
+  const date = new Date(isoDate);
+  const now = new Date();
+  const diffMs = now - date;
+
+  // Convert to seconds, minutes, hours, days
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHrs = Math.floor(diffMin / 60);
+  const diffDays = Math.floor(diffHrs / 24);
+
+  if (diffDays > 0) {
+    return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
+  } else if (diffHrs > 0) {
+    return `${diffHrs} hour${diffHrs > 1 ? "s" : ""} ago`;
+  } else if (diffMin > 0) {
+    return `${diffMin} minute${diffMin > 1 ? "s" : ""} ago`;
+  } else {
+    return `${diffSec} second${diffSec !== 1 ? "s" : ""} ago`;
+  }
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -1108,4 +1386,7 @@ module.exports = {
   createFirewallStatusEmbed,
   createFirewallOperationEmbed,
   createDetailedFirewallRulesEmbed,
+  createTailscaleStatusEmbed,
+  createTailscaleNetStatsEmbed,
+  createTailscaleOperationEmbed,
 };
