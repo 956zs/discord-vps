@@ -671,15 +671,29 @@ async function enableExitNode(hostname, specifiedIp) {
  */
 async function disableExitNode() {
   try {
-    console.log("[disableExitNode] Disabling exit node");
+    console.log("[disableExitNode] Starting to disable exit node");
 
     // Execute the command to disable the exit node
     const output = executeTailscaleCommand("up", {
       args: `--exit-node=""`,
       timeout: 15000,
+      shouldThrow: true,
     });
 
     console.log("[disableExitNode] Command output:", output);
+
+    // Verify the exit node was disabled by checking status
+    const status = await getStatus();
+    if (status && status.exitNode) {
+      console.log("[disableExitNode] Exit node is still enabled, retrying...");
+      // Try one more time with a different approach
+      const retryOutput = executeTailscaleCommand("up", {
+        args: "--reset",
+        timeout: 15000,
+        shouldThrow: true,
+      });
+      console.log("[disableExitNode] Retry output:", retryOutput);
+    }
 
     return {
       success: true,
@@ -687,7 +701,7 @@ async function disableExitNode() {
       output: output,
     };
   } catch (error) {
-    console.error("Error disabling exit node:", error);
+    console.error("[disableExitNode] Error:", error);
     return {
       success: false,
       error: error.message,
