@@ -1619,9 +1619,6 @@ module.exports = {
       else if (customId === "firewall_detailed_rules") {
         const firewallMonitor = require("../utils/firewallMonitor");
 
-        // Show a loading message while fetching the rules
-        await interaction.deferUpdate();
-
         // Get the detailed rules
         const detailedRules = await firewallMonitor.getDetailedRules();
 

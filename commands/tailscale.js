@@ -267,14 +267,8 @@ module.exports = {
   async handleInteraction(interaction) {
     const customId = interaction.customId;
 
-    // Safely defer the update
-    try {
-      await interaction.deferUpdate();
-    } catch (error) {
-      console.error("Error deferring interaction update:", error);
-      return false;
-    }
-
+    // 不需要在這裡調用 deferUpdate，因為 interactionCreate.js 已經處理了
+    // 只處理互動邏輯
     try {
       // Refresh Tailscale status button
       if (
