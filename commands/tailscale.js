@@ -61,18 +61,50 @@ module.exports = {
         const status = await tailscaleMonitor.getStatus();
 
         if (!status.success) {
+          console.error("Tailscale status error:", status.error);
           await interaction.respond([
             { name: "Error: Could not fetch Tailscale nodes", value: "error" },
           ]);
           return;
         }
 
+        // 記錄有幾個 peers
+        console.log(
+          `Autocomplete: Found ${status.peers.length} Tailscale peers`
+        );
+
         // Filter nodes that can be exit nodes and are online
         const exitNodes = status.peers
           .filter((peer) => peer.exitNode && peer.online)
           .map((peer) => ({ name: peer.hostname, value: peer.hostname }));
 
+        console.log(
+          `Autocomplete: Found ${exitNodes.length} eligible exit nodes`
+        );
+
+        // 打印所有可用的 exit nodes
+        exitNodes.forEach((node) => {
+          console.log(`- Exit node option: ${node.name}`);
+        });
+
         if (exitNodes.length === 0) {
+          console.log("No eligible exit nodes found for autocomplete");
+
+          // 檢查是否有任何 peers 是 exit node
+          const anyExitNodes = status.peers.filter((peer) => peer.exitNode);
+          if (anyExitNodes.length > 0) {
+            console.log(
+              `Found ${anyExitNodes.length} exit nodes, but they are offline`
+            );
+            await interaction.respond([
+              {
+                name: "Found exit nodes but they are offline",
+                value: "offline",
+              },
+            ]);
+            return;
+          }
+
           await interaction.respond([
             { name: "No eligible exit nodes found", value: "none" },
           ]);
@@ -84,10 +116,18 @@ module.exports = {
           choice.name.toLowerCase().includes(focusedOption.value.toLowerCase())
         );
 
+        console.log(
+          `Autocomplete: Returning ${filtered.length} filtered exit nodes`
+        );
         await interaction.respond(filtered);
       } catch (error) {
         console.error("Error in autocomplete:", error);
-        await interaction.respond([{ name: "Error occurred", value: "error" }]);
+        await interaction.respond([
+          {
+            name: "Error occurred: " + error.message.substring(0, 80),
+            value: "error",
+          },
+        ]);
       }
     }
   },
@@ -178,10 +218,55 @@ module.exports = {
     if (action === "on") {
       const hostname = interaction.options.getString("hostname");
 
-      if (!hostname || hostname === "error" || hostname === "none") {
+      if (!hostname) {
+        // 獲取所有可用的 exit nodes 並顯示給用戶
+        const status = await tailscaleMonitor.getStatus();
+
+        if (!status.success) {
+          await interaction.editReply({
+            content: `Unable to get Tailscale status: ${status.error}`,
+          });
+          return;
+        }
+
+        const eligibleExitNodes = status.peers.filter(
+          (p) => p.exitNode && p.online
+        );
+
+        if (eligibleExitNodes.length === 0) {
+          await interaction.editReply({
+            content:
+              "You must specify a valid hostname when enabling an exit node, but no eligible exit nodes were found. Ensure that some machines have exit node capability enabled in Tailscale admin.",
+          });
+          return;
+        }
+
+        // 顯示可用的 exit nodes 給用戶
+        const availableNodes = eligibleExitNodes
+          .map((p) => `- ${p.hostname} (${p.ip})`)
+          .join("\n");
+
         await interaction.editReply({
-          content:
-            "You must specify a valid hostname when enabling an exit node.",
+          content: `You must specify a valid hostname when enabling an exit node. Available exit nodes:\n\n${availableNodes}\n\nTry again with: \`/tailscale exit-node on <hostname>\``,
+        });
+        return;
+      }
+
+      if (
+        hostname === "error" ||
+        hostname === "none" ||
+        hostname === "offline"
+      ) {
+        const messageMap = {
+          error:
+            "There was an error retrieving exit nodes. Please check the server logs.",
+          none: "No eligible exit nodes were found. Ensure that some machines have exit node capability enabled in Tailscale admin.",
+          offline:
+            "Found exit nodes but they are currently offline. Please wait for them to come online.",
+        };
+
+        await interaction.editReply({
+          content: messageMap[hostname] || "Invalid hostname selection.",
         });
         return;
       }

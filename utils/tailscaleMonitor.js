@@ -19,28 +19,47 @@ async function getStatus() {
       success: true,
     };
 
-    // Process each peer in the status
-    for (const [id, peer] of Object.entries(statusData.Peer)) {
-      const peerInfo = {
-        id,
-        hostname: peer.HostName,
-        ip: peer.TailscaleIPs.join(", "),
-        os: peer.OS,
-        exitNode: !!peer.ExitNode,
-        online: !!peer.Online,
-        lastSeen: peer.LastSeen ? new Date(peer.LastSeen).toISOString() : null,
-        rxBytes: peer.RxBytes,
-        txBytes: peer.TxBytes,
-      };
+    // 首先處理本機資訊，從 Self 物件獲取資料
+    if (statusData.Self) {
+      // 獲取本機IP
+      const selfIPs = statusData.Self.TailscaleIPs || [];
+      // 獲取本機ID（如果可用）
+      const selfID = statusData.Self.ID;
 
-      // If this is the current machine, store it separately
-      if (id === statusData.Self.ID) {
-        formattedStatus.self = {
-          ...peerInfo,
-          exitNodeIP: statusData.Self.ExitNodeIP || null,
-          usingExitNode: !!statusData.Self.ExitNodeIP,
+      // 構建本機資訊
+      formattedStatus.self = {
+        id: selfID,
+        hostname: statusData.Self.HostName || "This Device",
+        ip: selfIPs.join(", "),
+        os: statusData.Self.OS || "Unknown",
+        exitNode: !!statusData.Self.CanExitNode,
+        online: true, // 自身肯定在線
+        rxBytes: statusData.Self.RxBytes,
+        txBytes: statusData.Self.TxBytes,
+        exitNodeIP: statusData.Self.ExitNodeIP || null,
+        usingExitNode: !!statusData.Self.ExitNodeIP,
+      };
+    }
+
+    // 處理 peers 資訊
+    if (statusData.Peer) {
+      // Process each peer in the status
+      for (const [id, peer] of Object.entries(statusData.Peer)) {
+        const peerInfo = {
+          id,
+          hostname: peer.HostName,
+          ip: peer.TailscaleIPs ? peer.TailscaleIPs.join(", ") : "",
+          os: peer.OS,
+          exitNode: !!peer.ExitNode,
+          online: !!peer.Online,
+          lastSeen: peer.LastSeen
+            ? new Date(peer.LastSeen).toISOString()
+            : null,
+          rxBytes: peer.RxBytes,
+          txBytes: peer.TxBytes,
         };
-      } else {
+
+        // 將 peer 資訊加入 peers 列表
         formattedStatus.peers.push(peerInfo);
       }
     }
@@ -73,13 +92,26 @@ async function enableExitNode(hostname) {
       };
     }
 
+    // 獲取可用的 exit nodes 並輸出更多日誌
+    const eligibleExitNodes = status.peers.filter(
+      (p) => p.exitNode && p.online
+    );
+    console.log(`Found ${eligibleExitNodes.length} eligible exit nodes:`);
+    eligibleExitNodes.forEach((node) => {
+      console.log(
+        `- ${node.hostname} (${node.ip}), Online: ${node.online}, ExitNode: ${node.exitNode}`
+      );
+    });
+
     // Find the peer with the specified hostname
     const peer = status.peers.find((p) => p.hostname === hostname);
     if (!peer) {
       return {
         success: false,
         error: `No peer found with hostname: ${hostname}`,
-        availableHosts: status.peers.map((p) => p.hostname),
+        availableHosts: status.peers
+          .filter((p) => p.exitNode && p.online)
+          .map((p) => p.hostname),
       };
     }
 
@@ -90,18 +122,49 @@ async function enableExitNode(hostname) {
         error: `Peer '${hostname}' is not configured as an exit node`,
         suggestion:
           "This peer must have exit node capability enabled in Tailscale admin",
+        availableHosts: status.peers
+          .filter((p) => p.exitNode && p.online)
+          .map((p) => p.hostname),
       };
     }
 
+    // Check if the peer is online
+    if (!peer.online) {
+      return {
+        success: false,
+        error: `Peer '${hostname}' is currently offline`,
+        suggestion: "Choose an online peer to use as exit node",
+        availableHosts: status.peers
+          .filter((p) => p.exitNode && p.online)
+          .map((p) => p.hostname),
+      };
+    }
+
+    // Ensure we have valid IP to use
+    if (!peer.ip) {
+      return {
+        success: false,
+        error: `Peer '${hostname}' has no valid IP address`,
+        availableHosts: status.peers
+          .filter((p) => p.exitNode && p.online && p.ip)
+          .map((p) => p.hostname),
+      };
+    }
+
+    // Extract the first IP if there are multiple
+    const exitNodeIP = peer.ip.split(",")[0].trim();
+    console.log(`Setting up exit node: ${hostname} with IP: ${exitNodeIP}`);
+
     // Set up the exit node
     const output = execSync(
-      `tailscale up --exit-node=${peer.ip.split(",")[0].trim()}`
+      `tailscale up --exit-node=${exitNodeIP}`
     ).toString();
+    console.log(`Exit node command output: ${output}`);
 
     return {
       success: true,
       message: `Successfully set ${hostname} as exit node`,
-      ip: peer.ip.split(",")[0].trim(),
+      ip: exitNodeIP,
       output: output,
     };
   } catch (error) {
