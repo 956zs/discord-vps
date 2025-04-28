@@ -3,42 +3,91 @@ const fs = require("fs");
 const path = require("path");
 
 /**
+ * Get the appropriate tailscale command for the current platform
+ * @param {string} subcommand The subcommand to run (e.g. "status", "up")
+ * @param {Object} options Additional options
+ * @returns {string} The command to execute
+ */
+function getTailscaleCommand(subcommand, options = {}) {
+  const platform = process.platform;
+  const { args = "", fallbackCheck = true } = options;
+
+  let baseCommand;
+
+  // Determine base command based on platform
+  if (platform === "win32") {
+    // Windows platform
+    try {
+      // Check if tailscale.exe is available in Program Files
+      if (
+        fallbackCheck &&
+        fs.existsSync("C:\\Program Files\\Tailscale\\tailscale.exe")
+      ) {
+        baseCommand = '"C:\\Program Files\\Tailscale\\tailscale.exe"';
+      } else {
+        // Just use tailscale.exe and let the PATH resolve it
+        baseCommand = "tailscale.exe";
+      }
+    } catch (error) {
+      // Default to tailscale.exe if any error occurs
+      console.log(
+        `[getTailscaleCommand] Error checking tailscale path: ${error.message}`
+      );
+      baseCommand = "tailscale.exe";
+    }
+  } else {
+    // Linux/macOS/other platforms
+    baseCommand = "tailscale";
+  }
+
+  // Build the full command
+  const fullCommand = `${baseCommand} ${subcommand}${args ? ` ${args}` : ""}`;
+  console.log(
+    `[getTailscaleCommand] Using command: ${fullCommand} for platform: ${platform}`
+  );
+
+  return fullCommand;
+}
+
+/**
+ * Execute a Tailscale command with error handling
+ * @param {string} subcommand The subcommand to run
+ * @param {Object} options Additional options
+ * @returns {string} The command output
+ */
+function executeTailscaleCommand(subcommand, options = {}) {
+  const { args = "", timeout = 10000, shouldThrow = true } = options;
+
+  try {
+    // Get the appropriate command for this platform
+    const command = getTailscaleCommand(subcommand, { args });
+
+    // Execute the command
+    const output = execSync(command, {
+      timeout,
+      shell: true,
+    }).toString();
+
+    return output;
+  } catch (error) {
+    console.error(
+      `[executeTailscaleCommand] Error executing ${subcommand}: ${error.message}`
+    );
+    if (shouldThrow) {
+      throw error;
+    }
+    return "";
+  }
+}
+
+/**
  * Get Tailscale status including all connected nodes
  * @returns {Object} Tailscale status information
  */
 async function getStatus() {
   try {
     // Run tailscale status command with JSON output
-    // 增加錯誤處理，並考慮 Windows 平台可能的不同指令路徑
-    let output;
-    try {
-      // 先嘗試標準指令
-      output = execSync("tailscale status --json", {
-        timeout: 10000,
-      }).toString();
-    } catch (cmdError) {
-      console.log(
-        "標準 tailscale 指令失敗，嘗試替代指令路徑...",
-        cmdError.message
-      );
-
-      try {
-        // 嘗試 Windows 平台上的可能完整路徑
-        output = execSync(
-          '"C:\\Program Files\\Tailscale\\tailscale.exe" status --json',
-          { timeout: 10000, shell: true }
-        ).toString();
-      } catch (winError) {
-        console.log("Windows 路徑嘗試失敗，嘗試其他位置...", winError.message);
-
-        // 最後嘗試一些常見替代位置
-        output = execSync("tailscale.exe status --json", {
-          timeout: 10000,
-          shell: true,
-        }).toString();
-      }
-    }
-
+    const output = executeTailscaleCommand("status", { args: "--json" });
     const statusData = JSON.parse(output);
 
     // 調試: 記錄完整的 JSON 結構
@@ -294,92 +343,62 @@ async function getExitNodesList() {
   try {
     console.log("[getExitNodesList] 嘗試使用專用 API 獲取 Exit Nodes 列表");
 
-    // 嘗試不同可能的命令
+    // Try the command with JSON output first
     let output;
     try {
-      // 嘗試標準命令 (Linux/macOS)
-      output = execSync("tailscale exit-nodes list --json", {
-        timeout: 10000,
-      }).toString();
-    } catch (stdError) {
-      console.log("[getExitNodesList] 標準命令失敗:", stdError.message);
-
-      try {
-        // 嘗試 Windows 完整路徑
-        output = execSync(
-          '"C:\\Program Files\\Tailscale\\tailscale.exe" exit-nodes list --json',
-          { timeout: 10000, shell: true }
-        ).toString();
-      } catch (winError) {
-        console.log(
-          "[getExitNodesList] Windows 路徑嘗試失敗:",
-          winError.message
-        );
-
-        try {
-          // 嘗試 Windows 普通路徑
-          output = execSync("tailscale.exe exit-nodes list --json", {
-            timeout: 10000,
-            shell: true,
-          }).toString();
-        } catch (winSimpleError) {
-          console.log(
-            "[getExitNodesList] Windows 簡單路徑嘗試失敗:",
-            winSimpleError.message
-          );
-
-          // 最後嘗試不用 --json 參數
-          output = execSync("tailscale exit-nodes list", {
-            timeout: 10000,
-            shell: true,
-          }).toString();
-        }
-      }
-    }
-
-    // 如果輸出不是 JSON 格式，嘗試解析文本輸出
-    let exitNodes = [];
-    try {
-      // 嘗試解析為 JSON
-      exitNodes = JSON.parse(output);
-      console.log(
-        `[getExitNodesList] 成功解析 JSON，找到 ${exitNodes.length} 個 exit nodes`
-      );
+      output = executeTailscaleCommand("exit-nodes", { args: "list --json" });
     } catch (jsonError) {
       console.log(
-        "[getExitNodesList] 無法解析 JSON，嘗試解析文本輸出:",
+        "[getExitNodesList] JSON output failed, trying without --json flag:",
         jsonError.message
       );
+      // Fall back to non-JSON format if necessary
+      output = executeTailscaleCommand("exit-nodes", { args: "list" });
+    }
 
-      // 如果不是 JSON，可能是文本格式，嘗試解析
+    // Process the output based on format
+    let exitNodes = [];
+    try {
+      // Try to parse as JSON
+      exitNodes = JSON.parse(output);
+      console.log(
+        `[getExitNodesList] Successfully parsed JSON, found ${exitNodes.length} exit nodes`
+      );
+    } catch (jsonParseError) {
+      console.log(
+        "[getExitNodesList] Not JSON format, parsing text output:",
+        jsonParseError.message
+      );
+
+      // Parse text format output
       const lines = output
         .split("\n")
         .filter((line) => line.trim().length > 0)
         .filter((line) => !line.includes("No exit nodes available"));
 
       if (lines.length > 1) {
-        // 假設第一行是標題行
+        // Assume first line is header
         const dataLines = lines.slice(1);
         dataLines.forEach((line) => {
           const parts = line.trim().split(/\s+/);
           if (parts.length >= 2) {
             exitNodes.push({
-              hostname: parts[0],
-              ip: parts[1],
-              online: true, // 假設列出的都是在線的
+              hostname: parts[1], // The hostname is typically in the second column
+              ip: parts[0], // The IP is typically in the first column
+              online: true, // Assume listed nodes are online
             });
           }
         });
 
         console.log(
-          `[getExitNodesList] 從文本解析出 ${exitNodes.length} 個 exit nodes`
+          `[getExitNodesList] Parsed ${exitNodes.length} exit nodes from text`
         );
       }
     }
 
     return exitNodes;
   } catch (error) {
-    console.error("[getExitNodesList] 獲取 Exit Nodes 列表失敗:", error);
+    console.error("[getExitNodesList] Failed to get exit nodes list:", error);
     return [];
   }
 }
@@ -392,10 +411,35 @@ async function getExitNodesList() {
  */
 async function enableExitNode(hostname, specifiedIp) {
   try {
+    console.log(
+      `[enableExitNode] Starting for hostname: ${hostname}${
+        specifiedIp ? `, IP: ${specifiedIp}` : ""
+      }`
+    );
+
+    // Check environment
+    const platform = process.platform;
+    console.log(`[enableExitNode] Platform: ${platform}`);
+
+    // Try to verify tailscale is running
+    try {
+      const pingOutput = executeTailscaleCommand("ping", {
+        shouldThrow: false,
+      });
+      if (pingOutput) {
+        console.log("[enableExitNode] Tailscale is responsive");
+      }
+    } catch (pingError) {
+      console.log(
+        "[enableExitNode] Tailscale ping check failed:",
+        pingError.message
+      );
+    }
+
     // 先嘗試使用專用 API 獲取 exit nodes 列表
     const exitNodesList = await getExitNodesList();
     console.log(
-      `[enableExitNode] 專用 API 返回了 ${exitNodesList.length} 個 exit nodes`
+      `[enableExitNode] Exit nodes API returned ${exitNodesList.length} nodes`
     );
 
     if (exitNodesList.length > 0) {
@@ -405,14 +449,16 @@ async function enableExitNode(hostname, specifiedIp) {
       );
       if (matchedNode) {
         console.log(
-          `[enableExitNode] 找到匹配的 exit node: ${JSON.stringify(
+          `[enableExitNode] Found matching exit node: ${JSON.stringify(
             matchedNode
           )}`
         );
       } else {
-        console.log(`[enableExitNode] 在 exit nodes 列表中未找到: ${hostname}`);
         console.log(
-          "可用的 exit nodes:",
+          `[enableExitNode] Hostname not found in exit nodes list: ${hostname}`
+        );
+        console.log(
+          "Available exit nodes:",
           exitNodesList.map((n) => n.hostname)
         );
       }
@@ -423,38 +469,12 @@ async function enableExitNode(hostname, specifiedIp) {
       console.log(`[enableExitNode] Using provided IP address: ${specifiedIp}`);
 
       // Set up the exit node with the specified IP
-      let output;
-      try {
-        // 先嘗試標準指令
-        output = execSync(`tailscale up --exit-node=${specifiedIp}`, {
-          timeout: 15000,
-        }).toString();
-      } catch (cmdError) {
-        console.log(
-          "[enableExitNode] 標準 tailscale 指令失敗，嘗試替代指令路徑...",
-          cmdError.message
-        );
+      const output = executeTailscaleCommand("up", {
+        args: `--exit-node=${specifiedIp}`,
+        timeout: 15000,
+      });
 
-        try {
-          // 嘗試 Windows 平台上的可能完整路徑
-          output = execSync(
-            `"C:\\Program Files\\Tailscale\\tailscale.exe" up --exit-node=${specifiedIp}`,
-            { timeout: 15000, shell: true }
-          ).toString();
-        } catch (winError) {
-          console.log(
-            "[enableExitNode] Windows 路徑嘗試失敗，嘗試其他位置...",
-            winError.message
-          );
-
-          // 最後嘗試一些常見替代位置
-          output = execSync(`tailscale.exe up --exit-node=${specifiedIp}`, {
-            timeout: 15000,
-            shell: true,
-          }).toString();
-        }
-      }
-      console.log(`[enableExitNode] Exit node command output: ${output}`);
+      console.log(`[enableExitNode] Command output: ${output}`);
 
       return {
         success: true,
@@ -480,25 +500,8 @@ async function enableExitNode(hostname, specifiedIp) {
       (p) => p.exitNode && p.online
     );
     console.log(
-      `[enableExitNode] Found ${eligibleExitNodes.length} eligible exit nodes:`
+      `[enableExitNode] Found ${eligibleExitNodes.length} eligible exit nodes`
     );
-    eligibleExitNodes.forEach((node) => {
-      console.log(
-        `- ${node.hostname} (${node.ip}), Online: ${node.online}, ExitNode: ${
-          node.exitNode
-        }, Type: ${node.exitNodeType || "unknown"}`
-      );
-    });
-
-    // 包含所有 peers 的資訊（用於調試）
-    console.log(`[enableExitNode] All peers (${status.peers.length}):`);
-    status.peers.forEach((node) => {
-      console.log(
-        `- ${node.hostname}: ExitNode=${node.exitNode}, Online=${
-          node.online
-        }, Type=${node.exitNodeType || "none"}`
-      );
-    });
 
     // Find the peer with the specified hostname
     const peer = status.peers.find((p) => p.hostname === hostname);
@@ -560,39 +563,13 @@ async function enableExitNode(hostname, specifiedIp) {
       `[enableExitNode] Setting up exit node: ${hostname} with IP: ${exitNodeIP}`
     );
 
-    // Set up the exit node with錯誤處理
-    let output;
-    try {
-      // 先嘗試標準指令
-      output = execSync(`tailscale up --exit-node=${exitNodeIP}`, {
-        timeout: 15000,
-      }).toString();
-    } catch (cmdError) {
-      console.log(
-        "[enableExitNode] 標準 tailscale 指令失敗，嘗試替代指令路徑...",
-        cmdError.message
-      );
+    // Set up the exit node using the helper function
+    const output = executeTailscaleCommand("up", {
+      args: `--exit-node=${exitNodeIP}`,
+      timeout: 15000,
+    });
 
-      try {
-        // 嘗試 Windows 平台上的可能完整路徑
-        output = execSync(
-          `"C:\\Program Files\\Tailscale\\tailscale.exe" up --exit-node=${exitNodeIP}`,
-          { timeout: 15000, shell: true }
-        ).toString();
-      } catch (winError) {
-        console.log(
-          "[enableExitNode] Windows 路徑嘗試失敗，嘗試其他位置...",
-          winError.message
-        );
-
-        // 最後嘗試一些常見替代位置
-        output = execSync(`tailscale.exe up --exit-node=${exitNodeIP}`, {
-          timeout: 15000,
-          shell: true,
-        }).toString();
-      }
-    }
-    console.log(`[enableExitNode] Exit node command output: ${output}`);
+    console.log(`[enableExitNode] Command output: ${output}`);
 
     return {
       success: true,
@@ -616,42 +593,15 @@ async function enableExitNode(hostname, specifiedIp) {
  */
 async function disableExitNode() {
   try {
-    console.log("[disableExitNode] 嘗試禁用 Exit Node");
+    console.log("[disableExitNode] Disabling exit node");
 
-    // 使用類似的錯誤處理邏輯
-    let output;
-    try {
-      // 先嘗試標準指令
-      output = execSync('tailscale up --exit-node=""', {
-        timeout: 15000,
-      }).toString();
-    } catch (cmdError) {
-      console.log(
-        "[disableExitNode] 標準 tailscale 指令失敗，嘗試替代指令路徑...",
-        cmdError.message
-      );
+    // Execute the command to disable the exit node
+    const output = executeTailscaleCommand("up", {
+      args: `--exit-node=""`,
+      timeout: 15000,
+    });
 
-      try {
-        // 嘗試 Windows 平台上的可能完整路徑
-        output = execSync(
-          '"C:\\Program Files\\Tailscale\\tailscale.exe" up --exit-node=""',
-          { timeout: 15000, shell: true }
-        ).toString();
-      } catch (winError) {
-        console.log(
-          "[disableExitNode] Windows 路徑嘗試失敗，嘗試其他位置...",
-          winError.message
-        );
-
-        // 最後嘗試一些常見替代位置
-        output = execSync('tailscale.exe up --exit-node=""', {
-          timeout: 15000,
-          shell: true,
-        }).toString();
-      }
-    }
-
-    console.log("[disableExitNode] 指令輸出:", output);
+    console.log("[disableExitNode] Command output:", output);
 
     return {
       success: true,
@@ -675,12 +625,47 @@ async function disableExitNode() {
 async function getNetStats() {
   try {
     // Try to get ping statistics to a public IP
-    const pingStats = execSync("ping -c 4 8.8.8.8").toString();
+    let pingStats = "";
+    try {
+      // Use different ping commands based on platform
+      if (process.platform === "win32") {
+        pingStats = execSync("ping -n 4 8.8.8.8", {
+          timeout: 10000,
+        }).toString();
+      } else {
+        pingStats = execSync("ping -c 4 8.8.8.8", {
+          timeout: 10000,
+        }).toString();
+      }
+    } catch (pingError) {
+      console.log("[getNetStats] Ping failed:", pingError.message);
+    }
 
-    // Get interface statistics
-    const ifconfigOutput = execSync(
-      "ifconfig tailscale0 || ip -s link show tailscale0"
-    ).toString();
+    // Get interface statistics based on platform
+    let ifconfigOutput = "";
+    try {
+      if (process.platform === "win32") {
+        // On Windows, try to get interface stats using netsh
+        ifconfigOutput = execSync(
+          "netsh interface ipv4 show interface tailscale",
+          { timeout: 10000 }
+        ).toString();
+      } else if (process.platform === "darwin") {
+        // macOS
+        ifconfigOutput = execSync("ifconfig utun | grep -A 6 tailscale", {
+          timeout: 10000,
+          shell: true,
+        }).toString();
+      } else {
+        // Linux and others
+        ifconfigOutput = execSync(
+          "ifconfig tailscale0 || ip -s link show tailscale0",
+          { timeout: 10000, shell: true }
+        ).toString();
+      }
+    } catch (ifError) {
+      console.log("[getNetStats] Interface stats failed:", ifError.message);
+    }
 
     // Attempt to get basic traffic information from tailscale status
     const status = await getStatus();
@@ -706,9 +691,51 @@ async function getNetStats() {
  */
 async function startTailscale() {
   try {
-    const output = execSync(
-      "sudo systemctl start tailscaled && tailscale up"
-    ).toString();
+    let output = "";
+
+    if (process.platform === "win32") {
+      // Windows: Start Tailscale service
+      try {
+        output +=
+          execSync("net start tailscale", { timeout: 10000 }).toString() + "\n";
+      } catch (serviceError) {
+        console.log(
+          "[startTailscale] Service start failed:",
+          serviceError.message
+        );
+      }
+
+      // Then run tailscale up
+      output += executeTailscaleCommand("up", { timeout: 15000 });
+    } else {
+      // Linux/macOS: Start the service and run tailscale up
+      try {
+        output +=
+          execSync("sudo systemctl start tailscaled", {
+            timeout: 10000,
+          }).toString() + "\n";
+      } catch (serviceError) {
+        console.log(
+          "[startTailscale] Service start failed, trying alternative methods"
+        );
+
+        // Try service command as fallback
+        try {
+          output +=
+            execSync("sudo service tailscaled start", {
+              timeout: 10000,
+            }).toString() + "\n";
+        } catch (altError) {
+          console.log(
+            "[startTailscale] Alternative service start failed:",
+            altError.message
+          );
+        }
+      }
+
+      // Run tailscale up regardless
+      output += executeTailscaleCommand("up", { timeout: 15000 });
+    }
 
     return {
       success: true,
@@ -720,7 +747,7 @@ async function startTailscale() {
     return {
       success: false,
       error: error.message,
-      command: "systemctl start tailscaled && tailscale up",
+      command: "Failed to start Tailscale service",
     };
   }
 }
@@ -731,9 +758,41 @@ async function startTailscale() {
  */
 async function stopTailscale() {
   try {
-    const output = execSync(
-      "tailscale down && sudo systemctl stop tailscaled"
-    ).toString();
+    let output = "";
+
+    // First, run tailscale down
+    output += executeTailscaleCommand("down", { timeout: 15000 }) + "\n";
+
+    // Then stop the service based on platform
+    if (process.platform === "win32") {
+      try {
+        output += execSync("net stop tailscale", { timeout: 10000 }).toString();
+      } catch (stopError) {
+        console.log("[stopTailscale] Service stop failed:", stopError.message);
+      }
+    } else {
+      try {
+        output += execSync("sudo systemctl stop tailscaled", {
+          timeout: 10000,
+        }).toString();
+      } catch (stopError) {
+        console.log(
+          "[stopTailscale] Service stop failed, trying alternative methods"
+        );
+
+        // Try service command as fallback
+        try {
+          output += execSync("sudo service tailscaled stop", {
+            timeout: 10000,
+          }).toString();
+        } catch (altError) {
+          console.log(
+            "[stopTailscale] Alternative service stop failed:",
+            altError.message
+          );
+        }
+      }
+    }
 
     return {
       success: true,
@@ -745,7 +804,7 @@ async function stopTailscale() {
     return {
       success: false,
       error: error.message,
-      command: "tailscale down && systemctl stop tailscaled",
+      command: "Failed to stop Tailscale service",
     };
   }
 }
