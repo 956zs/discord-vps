@@ -57,49 +57,79 @@ module.exports = {
 
     if (focusedOption.name === "hostname") {
       try {
+        console.log(
+          "[autocomplete] Starting autocomplete for hostname:",
+          focusedOption.value
+        );
+
         // Get all available nodes
         const status = await tailscaleMonitor.getStatus();
 
         if (!status.success) {
-          console.error("Tailscale status error:", status.error);
+          console.error("[autocomplete] Tailscale status error:", status.error);
           await interaction.respond([
             { name: "Error: Could not fetch Tailscale nodes", value: "error" },
           ]);
           return;
         }
 
-        // 記錄有幾個 peers
-        console.log(
-          `Autocomplete: Found ${status.peers.length} Tailscale peers`
-        );
+        // 詳細記錄所有 peers
+        console.log(`[autocomplete] All peers (${status.peers.length}):`);
+        status.peers.forEach((peer) => {
+          console.log(`- Peer: ${peer.hostname}`);
+          console.log(`  Online: ${peer.online}`);
+          console.log(`  Exit Node: ${peer.exitNode}`);
+          console.log(`  Exit Node Type: ${peer.exitNodeType || "none"}`);
+          console.log(`  OS: ${peer.os}`);
+          console.log(`  IP: ${peer.ip}`);
+        });
 
         // Filter nodes that can be exit nodes and are online
         const exitNodes = status.peers
           .filter((peer) => peer.exitNode && peer.online)
-          .map((peer) => ({ name: peer.hostname, value: peer.hostname }));
+          .map((peer) => ({
+            name: `${peer.hostname} (${peer.exitNodeType || "exit node"})`,
+            value: peer.hostname,
+          }));
 
         console.log(
-          `Autocomplete: Found ${exitNodes.length} eligible exit nodes`
+          `[autocomplete] Found ${exitNodes.length} eligible exit nodes`
         );
 
-        // 打印所有可用的 exit nodes
+        // 調試：詳細打印找到的 exit nodes
         exitNodes.forEach((node) => {
-          console.log(`- Exit node option: ${node.name}`);
+          console.log(`- Exit node option: ${node.name} => ${node.value}`);
         });
 
         if (exitNodes.length === 0) {
-          console.log("No eligible exit nodes found for autocomplete");
+          console.log(
+            "[autocomplete] No eligible exit nodes found for autocomplete"
+          );
 
-          // 檢查是否有任何 peers 是 exit node
+          // 檢查是否有任何 peers 是 exit node（不考慮在線狀態）
           const anyExitNodes = status.peers.filter((peer) => peer.exitNode);
           if (anyExitNodes.length > 0) {
             console.log(
-              `Found ${anyExitNodes.length} exit nodes, but they are offline`
+              `[autocomplete] Found ${anyExitNodes.length} exit nodes, but they are offline`
             );
             await interaction.respond([
               {
                 name: "Found exit nodes but they are offline",
                 value: "offline",
+              },
+            ]);
+            return;
+          }
+
+          // 檢查是否有任何 peers 但都不是 exit node
+          if (status.peers.length > 0) {
+            console.log(
+              `[autocomplete] Found ${status.peers.length} peers, but none are exit nodes`
+            );
+            await interaction.respond([
+              {
+                name: "Found peers but none are configured as exit nodes",
+                value: "no-exit-nodes",
               },
             ]);
             return;
@@ -117,11 +147,11 @@ module.exports = {
         );
 
         console.log(
-          `Autocomplete: Returning ${filtered.length} filtered exit nodes`
+          `[autocomplete] Returning ${filtered.length} filtered exit nodes`
         );
         await interaction.respond(filtered);
       } catch (error) {
-        console.error("Error in autocomplete:", error);
+        console.error("[autocomplete] Error in autocomplete:", error);
         await interaction.respond([
           {
             name: "Error occurred: " + error.message.substring(0, 80),

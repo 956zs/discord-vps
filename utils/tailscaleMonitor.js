@@ -9,8 +9,68 @@ const path = require("path");
 async function getStatus() {
   try {
     // Run tailscale status command with JSON output
-    const output = execSync("tailscale status --json").toString();
+    // 增加錯誤處理，並考慮 Windows 平台可能的不同指令路徑
+    let output;
+    try {
+      // 先嘗試標準指令
+      output = execSync("tailscale status --json", {
+        timeout: 10000,
+      }).toString();
+    } catch (cmdError) {
+      console.log(
+        "標準 tailscale 指令失敗，嘗試替代指令路徑...",
+        cmdError.message
+      );
+
+      try {
+        // 嘗試 Windows 平台上的可能完整路徑
+        output = execSync(
+          '"C:\\Program Files\\Tailscale\\tailscale.exe" status --json',
+          { timeout: 10000, shell: true }
+        ).toString();
+      } catch (winError) {
+        console.log("Windows 路徑嘗試失敗，嘗試其他位置...", winError.message);
+
+        // 最後嘗試一些常見替代位置
+        output = execSync("tailscale.exe status --json", {
+          timeout: 10000,
+          shell: true,
+        }).toString();
+      }
+    }
+
     const statusData = JSON.parse(output);
+
+    // 調試: 記錄完整的 JSON 結構
+    console.log("===== TAILSCALE DEBUG START =====");
+    console.log("Raw statusData keys:", Object.keys(statusData));
+
+    if (statusData.Self) {
+      console.log("Self properties:", Object.keys(statusData.Self));
+      console.log("Self.HostName:", statusData.Self.HostName);
+      console.log("Self.OS:", statusData.Self.OS);
+      console.log("Self.CanExitNode:", statusData.Self.CanExitNode);
+    }
+
+    if (statusData.Peer) {
+      console.log("Number of peers:", Object.keys(statusData.Peer).length);
+
+      // 遍歷每個 peer，檢查是否有 ExitNode 屬性
+      for (const [id, peer] of Object.entries(statusData.Peer)) {
+        console.log(`Peer ${peer.HostName}:`);
+        console.log(`  ID: ${id}`);
+        console.log(`  Online: ${peer.Online}`);
+        console.log(`  ExitNode: ${peer.ExitNode}`);
+        console.log(`  OS: ${peer.OS}`);
+        console.log(
+          `  IPs: ${peer.TailscaleIPs ? peer.TailscaleIPs.join(", ") : "None"}`
+        );
+
+        // 列出所有 peer 屬性，確保我們沒有遺漏任何重要信息
+        console.log(`  All properties: ${Object.keys(peer).join(", ")}`);
+      }
+    }
+    console.log("===== TAILSCALE DEBUG END =====");
 
     // Format the data for easier consumption
     const formattedStatus = {
@@ -45,12 +105,38 @@ async function getStatus() {
     if (statusData.Peer) {
       // Process each peer in the status
       for (const [id, peer] of Object.entries(statusData.Peer)) {
+        // 檢查 ExitNode 屬性，考慮可能的變種和其他方式
+        // Tailscale 可能使用 ExitNode、IsExitNode、CanExitNode 或其他屬性名稱
+        const isExitNode =
+          !!peer.ExitNode ||
+          !!peer.IsExitNode ||
+          !!peer.CanExitNode ||
+          (peer.Tags && peer.Tags.includes("exit-node")) ||
+          (peer.Capabilities && peer.Capabilities.includes("exit-node"));
+
+        // 檢查是否是正確的 Exit Node 類型 - 這是為了偵錯
+        let exitNodeType = null;
+        if (peer.ExitNode) exitNodeType = "ExitNode";
+        else if (peer.IsExitNode) exitNodeType = "IsExitNode";
+        else if (peer.CanExitNode) exitNodeType = "CanExitNode";
+        else if (peer.Tags && peer.Tags.includes("exit-node"))
+          exitNodeType = "Tags";
+        else if (peer.Capabilities && peer.Capabilities.includes("exit-node"))
+          exitNodeType = "Capabilities";
+
+        if (isExitNode) {
+          console.log(
+            `${peer.HostName} 具有 Exit Node 功能，識別為: ${exitNodeType}`
+          );
+        }
+
         const peerInfo = {
           id,
           hostname: peer.HostName,
           ip: peer.TailscaleIPs ? peer.TailscaleIPs.join(", ") : "",
           os: peer.OS,
-          exitNode: !!peer.ExitNode,
+          exitNode: isExitNode, // 使用擴展的檢測邏輯
+          exitNodeType: exitNodeType, // 記錄識別方式，幫助調試
           online: !!peer.Online,
           lastSeen: peer.LastSeen
             ? new Date(peer.LastSeen).toISOString()
@@ -63,6 +149,23 @@ async function getStatus() {
         formattedStatus.peers.push(peerInfo);
       }
     }
+
+    // 調試: 記錄格式化後的狀態，特別是 exit node 資訊
+    console.log("===== FORMATTED STATUS DEBUG =====");
+    console.log(`Total peers: ${formattedStatus.peers.length}`);
+    console.log("Peers with exit node capability:");
+    formattedStatus.peers
+      .filter((p) => p.exitNode)
+      .forEach((p) => {
+        console.log(`- ${p.hostname} (online: ${p.online})`);
+      });
+    console.log("Eligible exit nodes (exitNode=true and online=true):");
+    formattedStatus.peers
+      .filter((p) => p.exitNode && p.online)
+      .forEach((p) => {
+        console.log(`- ${p.hostname} (${p.ip})`);
+      });
+    console.log("===== FORMATTED STATUS DEBUG END =====");
 
     return formattedStatus;
   } catch (error) {
@@ -92,14 +195,28 @@ async function enableExitNode(hostname) {
       };
     }
 
-    // 獲取可用的 exit nodes 並輸出更多日誌
+    // 獲取可用的 exit nodes 並詳細輸出日誌
     const eligibleExitNodes = status.peers.filter(
       (p) => p.exitNode && p.online
     );
-    console.log(`Found ${eligibleExitNodes.length} eligible exit nodes:`);
+    console.log(
+      `[enableExitNode] Found ${eligibleExitNodes.length} eligible exit nodes:`
+    );
     eligibleExitNodes.forEach((node) => {
       console.log(
-        `- ${node.hostname} (${node.ip}), Online: ${node.online}, ExitNode: ${node.exitNode}`
+        `- ${node.hostname} (${node.ip}), Online: ${node.online}, ExitNode: ${
+          node.exitNode
+        }, Type: ${node.exitNodeType || "unknown"}`
+      );
+    });
+
+    // 包含所有 peers 的資訊（用於調試）
+    console.log(`[enableExitNode] All peers (${status.peers.length}):`);
+    status.peers.forEach((node) => {
+      console.log(
+        `- ${node.hostname}: ExitNode=${node.exitNode}, Online=${
+          node.online
+        }, Type=${node.exitNodeType || "none"}`
       );
     });
 
@@ -114,6 +231,12 @@ async function enableExitNode(hostname) {
           .map((p) => p.hostname),
       };
     }
+
+    // Print peer details for debugging
+    console.log(
+      `[enableExitNode] Selected peer details:`,
+      JSON.stringify(peer, null, 2)
+    );
 
     // Check if the peer can be used as an exit node
     if (!peer.exitNode) {
@@ -153,13 +276,43 @@ async function enableExitNode(hostname) {
 
     // Extract the first IP if there are multiple
     const exitNodeIP = peer.ip.split(",")[0].trim();
-    console.log(`Setting up exit node: ${hostname} with IP: ${exitNodeIP}`);
+    console.log(
+      `[enableExitNode] Setting up exit node: ${hostname} with IP: ${exitNodeIP}`
+    );
 
-    // Set up the exit node
-    const output = execSync(
-      `tailscale up --exit-node=${exitNodeIP}`
-    ).toString();
-    console.log(`Exit node command output: ${output}`);
+    // Set up the exit node with錯誤處理
+    let output;
+    try {
+      // 先嘗試標準指令
+      output = execSync(`tailscale up --exit-node=${exitNodeIP}`, {
+        timeout: 15000,
+      }).toString();
+    } catch (cmdError) {
+      console.log(
+        "[enableExitNode] 標準 tailscale 指令失敗，嘗試替代指令路徑...",
+        cmdError.message
+      );
+
+      try {
+        // 嘗試 Windows 平台上的可能完整路徑
+        output = execSync(
+          `"C:\\Program Files\\Tailscale\\tailscale.exe" up --exit-node=${exitNodeIP}`,
+          { timeout: 15000, shell: true }
+        ).toString();
+      } catch (winError) {
+        console.log(
+          "[enableExitNode] Windows 路徑嘗試失敗，嘗試其他位置...",
+          winError.message
+        );
+
+        // 最後嘗試一些常見替代位置
+        output = execSync(`tailscale.exe up --exit-node=${exitNodeIP}`, {
+          timeout: 15000,
+          shell: true,
+        }).toString();
+      }
+    }
+    console.log(`[enableExitNode] Exit node command output: ${output}`);
 
     return {
       success: true,
@@ -183,7 +336,42 @@ async function enableExitNode(hostname) {
  */
 async function disableExitNode() {
   try {
-    const output = execSync('tailscale up --exit-node=""').toString();
+    console.log("[disableExitNode] 嘗試禁用 Exit Node");
+
+    // 使用類似的錯誤處理邏輯
+    let output;
+    try {
+      // 先嘗試標準指令
+      output = execSync('tailscale up --exit-node=""', {
+        timeout: 15000,
+      }).toString();
+    } catch (cmdError) {
+      console.log(
+        "[disableExitNode] 標準 tailscale 指令失敗，嘗試替代指令路徑...",
+        cmdError.message
+      );
+
+      try {
+        // 嘗試 Windows 平台上的可能完整路徑
+        output = execSync(
+          '"C:\\Program Files\\Tailscale\\tailscale.exe" up --exit-node=""',
+          { timeout: 15000, shell: true }
+        ).toString();
+      } catch (winError) {
+        console.log(
+          "[disableExitNode] Windows 路徑嘗試失敗，嘗試其他位置...",
+          winError.message
+        );
+
+        // 最後嘗試一些常見替代位置
+        output = execSync('tailscale.exe up --exit-node=""', {
+          timeout: 15000,
+          shell: true,
+        }).toString();
+      }
+    }
+
+    console.log("[disableExitNode] 指令輸出:", output);
 
     return {
       success: true,
