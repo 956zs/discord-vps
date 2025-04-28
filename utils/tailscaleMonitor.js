@@ -90,70 +90,6 @@ async function getStatus() {
     const output = executeTailscaleCommand("status", { args: "--json" });
     const statusData = JSON.parse(output);
 
-    // 調試: 記錄完整的 JSON 結構
-    console.log("===== TAILSCALE DEBUG START =====");
-    console.log("Raw statusData keys:", Object.keys(statusData));
-
-    if (statusData.Self) {
-      console.log("Self properties:", Object.keys(statusData.Self));
-      console.log("Self.HostName:", statusData.Self.HostName);
-      console.log("Self.OS:", statusData.Self.OS);
-      console.log("Self.CanExitNode:", statusData.Self.CanExitNode);
-
-      // 詳細打印 Self 物件的所有屬性和值
-      console.log("==== Self Object Full Structure ====");
-      Object.keys(statusData.Self).forEach((key) => {
-        if (
-          typeof statusData.Self[key] === "object" &&
-          statusData.Self[key] !== null
-        ) {
-          console.log(
-            `Self.${key} (object):`,
-            JSON.stringify(statusData.Self[key], null, 2)
-          );
-        } else {
-          console.log(`Self.${key}:`, statusData.Self[key]);
-        }
-      });
-    }
-
-    if (statusData.Peer) {
-      console.log("Number of peers:", Object.keys(statusData.Peer).length);
-
-      // 遍歷每個 peer，檢查完整結構
-      for (const [id, peer] of Object.entries(statusData.Peer)) {
-        console.log(
-          `\n==== PEER FULL STRUCTURE: ${peer.HostName || "Unnamed"} ====`
-        );
-        console.log(`ID: ${id}`);
-
-        // 打印 peer 的所有屬性和值
-        Object.keys(peer).forEach((key) => {
-          if (typeof peer[key] === "object" && peer[key] !== null) {
-            console.log(`${key} (object):`, JSON.stringify(peer[key], null, 2));
-          } else {
-            console.log(`${key}:`, peer[key]);
-          }
-        });
-
-        // 特別關注可能與 Exit Node 有關的屬性
-        console.log(`\nExit Node Related Properties for ${peer.HostName}:`);
-        console.log(`ExitNode:`, peer.ExitNode);
-        console.log(`CanExitNode:`, peer.CanExitNode);
-        console.log(`IsExitNode:`, peer.IsExitNode);
-        console.log(`AllowedIPs:`, peer.AllowedIPs);
-
-        if (peer.Capabilities) {
-          console.log(`Capabilities:`, peer.Capabilities);
-        }
-
-        if (peer.CapMap) {
-          console.log(`CapMap:`, peer.CapMap);
-        }
-      }
-    }
-    console.log("===== TAILSCALE DEBUG END =====");
-
     // Format the data for easier consumption
     const formattedStatus = {
       self: {}, // Will store information about this device
@@ -265,34 +201,13 @@ async function getStatus() {
           exitNodeReason = "StableID";
         }
 
-        // 基於設備名稱的啟發式檢查（最後手段）
-        if (!isExitNode) {
-          const hostname = peer.HostName || "";
-          if (
-            hostname.toLowerCase().includes("exit") ||
-            hostname.toLowerCase().includes("router") ||
-            hostname.toLowerCase().includes("gateway")
-          ) {
-            console.log(`[getStatus] 根據主機名，${hostname} 可能是 Exit Node`);
-          }
-        }
-
-        // 打印结果
-        if (isExitNode) {
-          console.log(
-            `[getStatus] 發現 Exit Node: ${peer.HostName}, 識別方式: ${exitNodeReason}`
-          );
-        } else {
-          console.log(`[getStatus] ${peer.HostName} 不是 Exit Node`);
-        }
-
         const peerInfo = {
           id,
           hostname: peer.HostName,
           ip: peer.TailscaleIPs ? peer.TailscaleIPs.join(", ") : "",
           os: peer.OS,
-          exitNode: isExitNode, // 使用擴展的檢測邏輯
-          exitNodeType: exitNodeReason, // 記錄識別方式，幫助調試
+          exitNode: isExitNode,
+          exitNodeType: exitNodeReason,
           online: !!peer.Online,
           lastSeen: peer.LastSeen
             ? new Date(peer.LastSeen).toISOString()
@@ -305,23 +220,6 @@ async function getStatus() {
         formattedStatus.peers.push(peerInfo);
       }
     }
-
-    // 調試: 記錄格式化後的狀態，特別是 exit node 資訊
-    console.log("===== FORMATTED STATUS DEBUG =====");
-    console.log(`Total peers: ${formattedStatus.peers.length}`);
-    console.log("Peers with exit node capability:");
-    formattedStatus.peers
-      .filter((p) => p.exitNode)
-      .forEach((p) => {
-        console.log(`- ${p.hostname} (online: ${p.online})`);
-      });
-    console.log("Eligible exit nodes (exitNode=true and online=true):");
-    formattedStatus.peers
-      .filter((p) => p.exitNode && p.online)
-      .forEach((p) => {
-        console.log(`- ${p.hostname} (${p.ip})`);
-      });
-    console.log("===== FORMATTED STATUS DEBUG END =====");
 
     return formattedStatus;
   } catch (error) {
@@ -373,8 +271,6 @@ async function getExitNodesList() {
           !line.includes("Options:")
       );
 
-    console.log("[getExitNodesList] Raw output lines:", lines.length);
-
     if (lines.length > 0) {
       // Check if there's a header row
       const hasHeader =
@@ -420,9 +316,7 @@ async function getExitNodesList() {
       });
     }
 
-    console.log(
-      `[getExitNodesList] Found ${exitNodes.length} valid exit nodes`
-    );
+    console.log(`[getExitNodesList] Found ${exitNodes.length} exit nodes`);
     return exitNodes;
   } catch (error) {
     console.error("[getExitNodesList] Error:", error);
@@ -466,55 +360,32 @@ function extractFirstIPv4(ipString) {
 async function enableExitNode(hostname, specifiedIp) {
   try {
     console.log(
-      `[enableExitNode] Starting for hostname: ${hostname}${
-        specifiedIp ? `, IP: ${specifiedIp}` : ""
+      `[enableExitNode] Setting exit node: ${hostname}${
+        specifiedIp ? ` (IP: ${specifiedIp})` : ""
       }`
     );
 
-    // Check environment
-    const platform = process.platform;
-    console.log(`[enableExitNode] Platform: ${platform}`);
+    // If a specific IP was provided, use it directly
+    if (specifiedIp) {
+      // Extract first IPv4 address from potentially multiple addresses
+      const ipToUse = extractFirstIPv4(specifiedIp);
 
-    // Try to verify tailscale is running - only if we have a valid target
-    // Get a list of peers to use as ping targets
-    let pingTarget = null;
-    try {
-      const status = await getStatus();
-      if (status && status.peers && status.peers.length > 0) {
-        // Use the first online peer as a ping target
-        const onlinePeer = status.peers.find((peer) => peer.online);
-        if (onlinePeer && onlinePeer.ip) {
-          pingTarget = onlinePeer.ip.split(",")[0].trim(); // Get first IP if multiple
-        }
-      }
+      // Set up the exit node with the specified IP
+      const output = executeTailscaleCommand("up", {
+        args: `--exit-node=${ipToUse}`,
+        timeout: 15000,
+      });
 
-      // If we found a valid target, try to ping it
-      if (pingTarget) {
-        console.log(`[enableExitNode] Using ${pingTarget} as ping target`);
-        const pingOutput = executeTailscaleCommand("ping", {
-          args: pingTarget,
-          shouldThrow: false,
-        });
-        if (pingOutput) {
-          console.log("[enableExitNode] Tailscale is responsive");
-        }
-      } else {
-        console.log(
-          "[enableExitNode] No valid ping target available, skipping ping check"
-        );
-      }
-    } catch (pingError) {
-      console.log(
-        "[enableExitNode] Tailscale ping check failed:",
-        pingError.message
-      );
+      return {
+        success: true,
+        message: `Successfully set ${hostname} as exit node`,
+        ip: ipToUse,
+        output: output,
+      };
     }
 
     // 先嘗試使用專用 API 獲取 exit nodes 列表
     const exitNodesList = await getExitNodesList();
-    console.log(
-      `[enableExitNode] Exit nodes API returned ${exitNodesList.length} nodes`
-    );
 
     if (exitNodesList.length > 0) {
       // 找到匹配的 exit node
@@ -523,43 +394,25 @@ async function enableExitNode(hostname, specifiedIp) {
       );
       if (matchedNode) {
         console.log(
-          `[enableExitNode] Found matching exit node: ${JSON.stringify(
-            matchedNode
-          )}`
+          `[enableExitNode] Found matching exit node: ${matchedNode.hostname}`
         );
-      } else {
-        console.log(
-          `[enableExitNode] Hostname not found in exit nodes list: ${hostname}`
-        );
-        console.log(
-          "Available exit nodes:",
-          exitNodesList.map((n) => n.hostname)
-        );
+
+        // Extract the first IPv4 address if there are multiple
+        const exitNodeIP = extractFirstIPv4(matchedNode.ip);
+
+        // Set up the exit node
+        const output = executeTailscaleCommand("up", {
+          args: `--exit-node=${exitNodeIP}`,
+          timeout: 15000,
+        });
+
+        return {
+          success: true,
+          message: `Successfully set ${hostname} as exit node`,
+          ip: exitNodeIP,
+          output: output,
+        };
       }
-    }
-
-    // If a specific IP was provided, use it directly
-    if (specifiedIp) {
-      // Extract first IPv4 address from potentially multiple addresses
-      const ipToUse = extractFirstIPv4(specifiedIp);
-      console.log(
-        `[enableExitNode] Using IP address: ${ipToUse} (extracted from: ${specifiedIp})`
-      );
-
-      // Set up the exit node with the specified IP
-      const output = executeTailscaleCommand("up", {
-        args: `--exit-node=${ipToUse}`,
-        timeout: 15000,
-      });
-
-      console.log(`[enableExitNode] Command output: ${output}`);
-
-      return {
-        success: true,
-        message: `Successfully set ${hostname} as exit node`,
-        ip: ipToUse,
-        output: output,
-      };
     }
 
     // 繼續使用原有流程作為備用
@@ -573,14 +426,6 @@ async function enableExitNode(hostname, specifiedIp) {
       };
     }
 
-    // 獲取可用的 exit nodes 並詳細輸出日誌
-    const eligibleExitNodes = status.peers.filter(
-      (p) => p.exitNode && p.online
-    );
-    console.log(
-      `[enableExitNode] Found ${eligibleExitNodes.length} eligible exit nodes`
-    );
-
     // Find the peer with the specified hostname
     const peer = status.peers.find((p) => p.hostname === hostname);
     if (!peer) {
@@ -592,12 +437,6 @@ async function enableExitNode(hostname, specifiedIp) {
           .map((p) => p.hostname),
       };
     }
-
-    // Print peer details for debugging
-    console.log(
-      `[enableExitNode] Selected peer details:`,
-      JSON.stringify(peer, null, 2)
-    );
 
     // Check if the peer can be used as an exit node
     if (!peer.exitNode) {
@@ -641,13 +480,11 @@ async function enableExitNode(hostname, specifiedIp) {
       `[enableExitNode] Setting up exit node: ${hostname} with IP: ${exitNodeIP}`
     );
 
-    // Set up the exit node using the helper function
+    // Set up the exit node
     const output = executeTailscaleCommand("up", {
       args: `--exit-node=${exitNodeIP}`,
       timeout: 15000,
     });
-
-    console.log(`[enableExitNode] Command output: ${output}`);
 
     return {
       success: true,
@@ -671,29 +508,15 @@ async function enableExitNode(hostname, specifiedIp) {
  */
 async function disableExitNode() {
   try {
-    console.log("[disableExitNode] Starting to disable exit node");
+    console.log("[disableExitNode] Disabling exit node");
 
-    // Execute the command to disable the exit node
+    // Execute the command to disable the exit node - use --exit-node= without quotes
     const output = executeTailscaleCommand("up", {
-      args: `--exit-node=""`,
+      args: `--exit-node=`,
       timeout: 15000,
-      shouldThrow: true,
     });
 
     console.log("[disableExitNode] Command output:", output);
-
-    // Verify the exit node was disabled by checking status
-    const status = await getStatus();
-    if (status && status.exitNode) {
-      console.log("[disableExitNode] Exit node is still enabled, retrying...");
-      // Try one more time with a different approach
-      const retryOutput = executeTailscaleCommand("up", {
-        args: "--reset",
-        timeout: 15000,
-        shouldThrow: true,
-      });
-      console.log("[disableExitNode] Retry output:", retryOutput);
-    }
 
     return {
       success: true,
@@ -701,11 +524,11 @@ async function disableExitNode() {
       output: output,
     };
   } catch (error) {
-    console.error("[disableExitNode] Error:", error);
+    console.error("Error disabling exit node:", error);
     return {
       success: false,
       error: error.message,
-      command: 'tailscale up --exit-node=""',
+      command: "tailscale up --exit-node=",
     };
   }
 }
