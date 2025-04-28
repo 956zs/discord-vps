@@ -757,4 +757,5 @@ module.exports = {
   getNetStats,
   startTailscale,
   stopTailscale,
+  getExitNodesList,
 };

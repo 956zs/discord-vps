@@ -290,8 +290,6 @@ module.exports = {
   },
 
   async handleExitNode(interaction) {
-    await interaction.deferReply({ ephemeral: true });
-
     try {
       const hostname = interaction.options.getString("hostname");
 
