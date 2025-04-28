@@ -782,6 +782,262 @@ function createComposePullResultEmbed(pullResult) {
   return embed;
 }
 
+/**
+ * Create a WireGuard interfaces list embed
+ * @param {Object} interfacesData - WireGuard interfaces data from wireguardMonitor.js
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createWireGuardInterfacesEmbed(interfacesData) {
+  const embed = new EmbedBuilder()
+    .setColor("#88AADD")
+    .setTitle("WireGuard Interfaces")
+    .setTimestamp();
+
+  if (!interfacesData.success) {
+    embed.setDescription(`Error: ${interfacesData.error}`);
+    return embed;
+  }
+
+  if (interfacesData.interfaces.length === 0) {
+    embed.setDescription("No WireGuard interfaces found on this system.");
+    return embed;
+  }
+
+  // Add summary information
+  const activeCount = interfacesData.interfaces.filter((i) => i.isUp).length;
+  embed.setDescription(
+    `Found ${interfacesData.interfaces.length} interfaces (${activeCount} active)`
+  );
+
+  // Add each interface as a field
+  interfacesData.interfaces.forEach((iface) => {
+    const statusEmoji = iface.isUp ? "🟢" : "🔴";
+    const statusText = iface.isUp ? "Active" : "Inactive";
+
+    let fieldValue = `Status: ${statusEmoji} ${statusText}\n`;
+    fieldValue += `IP: \`${iface.ip}\`\n`;
+    fieldValue += `Peers: ${iface.peerCount}\n`;
+    fieldValue += `Port: ${iface.listenPort}\n`;
+
+    if (iface.error) {
+      fieldValue += `⚠️ Error: ${iface.error}\n`;
+    }
+
+    embed.addFields({
+      name: `Interface: ${iface.name}`,
+      value: fieldValue,
+      inline: true,
+    });
+  });
+
+  return embed;
+}
+
+/**
+ * Create a WireGuard peer list embed
+ * @param {Object} peerData - WireGuard peer data from wireguardMonitor.js
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createWireGuardPeersEmbed(peerData) {
+  const embed = new EmbedBuilder()
+    .setColor("#88AADD")
+    .setTitle(`WireGuard Peers for ${peerData.interface}`)
+    .setTimestamp();
+
+  if (!peerData.success) {
+    embed.setDescription(`Error: ${peerData.error}`);
+    return embed;
+  }
+
+  if (peerData.peers.length === 0) {
+    embed.setDescription(`No peers found for interface ${peerData.interface}.`);
+    return embed;
+  }
+
+  embed.setDescription(
+    `Found ${peerData.peers.length} peers for interface ${peerData.interface}`
+  );
+
+  // Add peers as fields (limit to 25 as Discord has a limit of 25 fields)
+  const maxPeers = Math.min(peerData.peers.length, 25);
+
+  for (let i = 0; i < maxPeers; i++) {
+    const peer = peerData.peers[i];
+    const peerName = peer.name || "Unnamed peer";
+
+    let fieldValue = ``;
+    if (peer.allowedIPs) fieldValue += `Allowed IPs: \`${peer.allowedIPs}\`\n`;
+    if (peer.endpoint) fieldValue += `Endpoint: \`${peer.endpoint}\`\n`;
+    fieldValue += `Last handshake: ${peer.latestHandshake}\n`;
+    fieldValue += `Transfer: ↓${peer.transferRx} ↑${peer.transferTx}\n`;
+
+    embed.addFields({
+      name: `${i + 1}. ${peerName}`,
+      value: fieldValue,
+      inline: false,
+    });
+  }
+
+  // If there are more peers than we can show
+  if (peerData.peers.length > maxPeers) {
+    embed.setFooter({
+      text: `Showing ${maxPeers} out of ${peerData.peers.length} peers due to Discord limitations`,
+    });
+  }
+
+  return embed;
+}
+
+/**
+ * Create a WireGuard operation result embed
+ * @param {Object} result - Operation result from wireguardMonitor.js
+ * @param {string} operation - Operation type (restart, add, remove)
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createWireGuardOperationEmbed(result, operation) {
+  const embed = new EmbedBuilder().setTimestamp();
+
+  if (!result.success) {
+    embed
+      .setColor("#FF5555")
+      .setTitle(`WireGuard ${operation} Failed`)
+      .setDescription(`Error: ${result.error}`);
+    return embed;
+  }
+
+  embed.setColor("#55FF55").setTitle(`WireGuard ${operation} Successful`);
+
+  switch (operation.toLowerCase()) {
+    case "restart":
+      embed.setDescription(
+        `Successfully restarted interface \`${result.interface}\``
+      );
+      break;
+    case "add-peer":
+      embed.setDescription(
+        `Successfully added peer to interface \`${result.interface}\`\n` +
+          `Name: ${result.peer.name}\n` +
+          `Allowed IPs: \`${result.peer.allowedIPs}\``
+      );
+      break;
+    case "remove-peer":
+      embed.setDescription(
+        `Successfully removed peer from interface \`${result.interface}\`\n` +
+          `Public Key: \`${result.publicKey}\``
+      );
+      break;
+    default:
+      embed.setDescription(`Operation completed successfully`);
+  }
+
+  return embed;
+}
+
+/**
+ * Create a firewall status embed
+ * @param {Object} firewallData - Firewall status data from firewallMonitor.js
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createFirewallStatusEmbed(firewallData) {
+  const embed = new EmbedBuilder()
+    .setColor("#DD5555")
+    .setTitle("Firewall Status")
+    .setTimestamp();
+
+  if (!firewallData.success) {
+    embed.setDescription(`Error: ${firewallData.error}`);
+    return embed;
+  }
+
+  // Add summary information
+  let description = "## IPTables Firewall Status\n";
+
+  // Add UFW status if available
+  if (firewallData.ufw) {
+    const ufwStatus = firewallData.ufw.active ? "Active" : "Inactive";
+    description += `\n**UFW**: ${ufwStatus}\n`;
+  }
+
+  // Add Firewalld status if available
+  if (firewallData.firewalld) {
+    const firewalldStatus = firewallData.firewalld.active
+      ? "Active"
+      : "Inactive";
+    description += `\n**Firewalld**: ${firewalldStatus}\n`;
+  }
+
+  embed.setDescription(description);
+
+  // Add chain information
+  const chains = [
+    { name: "INPUT", data: firewallData.iptables.input },
+    { name: "OUTPUT", data: firewallData.iptables.output },
+    { name: "FORWARD", data: firewallData.iptables.forward },
+  ];
+
+  chains.forEach((chain) => {
+    const { name, data } = chain;
+
+    // Create a breakdown of rules by target
+    let targetBreakdown = "";
+    for (const [target, stats] of Object.entries(data.stats.byTarget)) {
+      targetBreakdown += `${target}: ${stats.count} rules (${stats.bytesFormatted})\n`;
+    }
+
+    // Format the field value
+    let fieldValue = `Default policy: **${data.policy}**\n`;
+    fieldValue += `Total rules: ${data.rules.length}\n`;
+    fieldValue += `Total traffic: ${data.stats.totalBytesFormatted}\n\n`;
+
+    if (targetBreakdown) {
+      fieldValue += `**Rule targets:**\n${targetBreakdown}`;
+    }
+
+    embed.addFields({
+      name: `${name} Chain`,
+      value: fieldValue,
+      inline: true,
+    });
+  });
+
+  return embed;
+}
+
+/**
+ * Create a firewall IP block operation result embed
+ * @param {Object} result - Operation result from firewallMonitor.js
+ * @param {string} operation - Operation type (block, unblock)
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createFirewallOperationEmbed(result, operation) {
+  const embed = new EmbedBuilder().setTimestamp();
+
+  if (!result.success) {
+    embed
+      .setColor("#FF5555")
+      .setTitle(`Firewall ${operation} Failed`)
+      .setDescription(`Error: ${result.error}`);
+    return embed;
+  }
+
+  embed.setColor("#55FF55").setTitle(`Firewall ${operation} Successful`);
+
+  switch (operation.toLowerCase()) {
+    case "block":
+      embed.setDescription(`Successfully blocked IP address \`${result.ip}\``);
+      break;
+    case "unblock":
+      embed.setDescription(
+        `Successfully unblocked IP address \`${result.ip}\``
+      );
+      break;
+    default:
+      embed.setDescription(`Operation completed successfully`);
+  }
+
+  return embed;
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -792,9 +1048,15 @@ module.exports = {
   createContainerLogsEmbed,
   createImageListEmbed,
   createImagePullEmbed,
-  // Docker Compose 相關
   createComposeProjectsListEmbed,
   createComposeProjectDetailsEmbed,
   createComposeOperationResultEmbed,
   createComposePullResultEmbed,
+  // WireGuard embeds
+  createWireGuardInterfacesEmbed,
+  createWireGuardPeersEmbed,
+  createWireGuardOperationEmbed,
+  // Firewall embeds
+  createFirewallStatusEmbed,
+  createFirewallOperationEmbed,
 };

@@ -1391,6 +1391,363 @@ module.exports = {
           });
         }
       }
+
+      // Below is where we'll add our new handlers for WireGuard and firewall
+
+      // WireGuard interfaces refresh button
+      else if (customId === "refresh_wg_interfaces") {
+        const wireguardMonitor = require("../utils/wireguardMonitor");
+        const interfacesData = await wireguardMonitor.listInterfaces();
+        const embed =
+          embedBuilder.createWireGuardInterfacesEmbed(interfacesData);
+
+        // Create refresh button
+        const refreshButton = new ButtonBuilder()
+          .setCustomId("refresh_wg_interfaces")
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder().addComponents(refreshButton);
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      }
+
+      // WireGuard peers refresh button
+      else if (customId.startsWith("refresh_wg_peers_")) {
+        const wireguardMonitor = require("../utils/wireguardMonitor");
+        const interfaceName = customId.replace("refresh_wg_peers_", "");
+
+        const peerData = await wireguardMonitor.getPeers(interfaceName);
+        const embed = embedBuilder.createWireGuardPeersEmbed(peerData);
+
+        // Create refresh button
+        const refreshButton = new ButtonBuilder()
+          .setCustomId(`refresh_wg_peers_${interfaceName}`)
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Primary);
+
+        // Create back to interfaces button
+        const backButton = new ButtonBuilder()
+          .setCustomId("wg_interfaces")
+          .setLabel("Back to Interfaces")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          backButton
+        );
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      }
+
+      // Go back to WireGuard interfaces list
+      else if (customId === "wg_interfaces") {
+        const wireguardMonitor = require("../utils/wireguardMonitor");
+        const interfacesData = await wireguardMonitor.listInterfaces();
+        const embed =
+          embedBuilder.createWireGuardInterfacesEmbed(interfacesData);
+
+        // Create refresh button
+        const refreshButton = new ButtonBuilder()
+          .setCustomId("refresh_wg_interfaces")
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder().addComponents(refreshButton);
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      }
+
+      // Confirm WireGuard interface restart
+      else if (customId.startsWith("confirm_wg_restart_")) {
+        const wireguardMonitor = require("../utils/wireguardMonitor");
+        const interfaceName = customId.replace("confirm_wg_restart_", "");
+
+        // Restart the interface
+        await interaction.editReply({
+          content: `Restarting WireGuard interface ${interfaceName}...`,
+          components: [],
+        });
+
+        const result = await wireguardMonitor.restartInterface(interfaceName);
+        const embed = embedBuilder.createWireGuardOperationEmbed(
+          result,
+          "restart"
+        );
+
+        // Create buttons
+        const refreshButton = new ButtonBuilder()
+          .setCustomId("refresh_wg_interfaces")
+          .setLabel("View Interfaces")
+          .setStyle(ButtonStyle.Primary);
+
+        const peersButton = new ButtonBuilder()
+          .setCustomId(`refresh_wg_peers_${interfaceName}`)
+          .setLabel("View Peers")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          peersButton
+        );
+
+        await interaction.editReply({
+          embeds: [embed],
+          components: [row],
+          content: null,
+        });
+      }
+
+      // Cancel WireGuard interface restart
+      else if (customId.startsWith("cancel_wg_restart_")) {
+        const interfaceName = customId.replace("cancel_wg_restart_", "");
+
+        await interaction.editReply({
+          content: `Restart operation cancelled for WireGuard interface ${interfaceName}.`,
+          components: [],
+        });
+      }
+
+      // Confirm WireGuard peer removal
+      else if (customId.startsWith("confirm_wg_remove_peer_")) {
+        const wireguardMonitor = require("../utils/wireguardMonitor");
+        const params = customId
+          .replace("confirm_wg_remove_peer_", "")
+          .split("_");
+
+        if (params.length !== 2) {
+          await interaction.editReply({
+            content: "Invalid operation parameters.",
+            components: [],
+          });
+          return;
+        }
+
+        const interfaceName = params[0];
+        const publicKey = params[1];
+
+        // Remove the peer
+        await interaction.editReply({
+          content: `Removing peer from WireGuard interface ${interfaceName}...`,
+          components: [],
+        });
+
+        const result = await wireguardMonitor.removePeer(
+          interfaceName,
+          publicKey
+        );
+        const embed = embedBuilder.createWireGuardOperationEmbed(
+          result,
+          "remove-peer"
+        );
+
+        // Create buttons
+        const interfacesButton = new ButtonBuilder()
+          .setCustomId("refresh_wg_interfaces")
+          .setLabel("View Interfaces")
+          .setStyle(ButtonStyle.Primary);
+
+        const peersButton = new ButtonBuilder()
+          .setCustomId(`refresh_wg_peers_${interfaceName}`)
+          .setLabel("View Peers")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          interfacesButton,
+          peersButton
+        );
+
+        await interaction.editReply({
+          embeds: [embed],
+          components: [row],
+          content: null,
+        });
+      }
+
+      // Cancel WireGuard peer removal
+      else if (customId === "cancel_wg_remove_peer") {
+        await interaction.editReply({
+          content: "Peer removal operation cancelled.",
+          components: [],
+        });
+      }
+
+      // Firewall status refresh button
+      else if (customId === "refresh_firewall_status") {
+        const firewallMonitor = require("../utils/firewallMonitor");
+        const firewallData = await firewallMonitor.getFirewallStatus();
+        const embed = embedBuilder.createFirewallStatusEmbed(firewallData);
+
+        // Create refresh button
+        const refreshButton = new ButtonBuilder()
+          .setCustomId("refresh_firewall_status")
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder().addComponents(refreshButton);
+
+        await interaction.editReply({ embeds: [embed], components: [row] });
+      }
+
+      // Confirm firewall IP block
+      else if (customId.startsWith("confirm_firewall_block_")) {
+        const firewallMonitor = require("../utils/firewallMonitor");
+        const ipAddress = customId.replace("confirm_firewall_block_", "");
+
+        // Block the IP
+        await interaction.editReply({
+          content: `Blocking IP address ${ipAddress}...`,
+          components: [],
+        });
+
+        const result = await firewallMonitor.blockIP(ipAddress);
+        const embed = embedBuilder.createFirewallOperationEmbed(
+          result,
+          "block"
+        );
+
+        // Create buttons
+        const statusButton = new ButtonBuilder()
+          .setCustomId("refresh_firewall_status")
+          .setLabel("View Firewall Status")
+          .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder().addComponents(statusButton);
+
+        await interaction.editReply({
+          embeds: [embed],
+          components: [row],
+          content: null,
+        });
+      }
+
+      // Cancel firewall block operation
+      else if (customId === "cancel_firewall_block") {
+        await interaction.editReply({
+          content: "IP blocking operation cancelled.",
+          components: [],
+        });
+      }
+
+      // Confirm firewall IP unblock
+      else if (customId.startsWith("confirm_firewall_unblock_")) {
+        const firewallMonitor = require("../utils/firewallMonitor");
+        const ipAddress = customId.replace("confirm_firewall_unblock_", "");
+
+        // Unblock the IP
+        await interaction.editReply({
+          content: `Unblocking IP address ${ipAddress}...`,
+          components: [],
+        });
+
+        const result = await firewallMonitor.unblockIP(ipAddress);
+        const embed = embedBuilder.createFirewallOperationEmbed(
+          result,
+          "unblock"
+        );
+
+        // Create buttons
+        const statusButton = new ButtonBuilder()
+          .setCustomId("refresh_firewall_status")
+          .setLabel("View Firewall Status")
+          .setStyle(ButtonStyle.Primary);
+
+        const row = new ActionRowBuilder().addComponents(statusButton);
+
+        await interaction.editReply({
+          embeds: [embed],
+          components: [row],
+          content: null,
+        });
+      }
+
+      // Cancel firewall operation
+      else if (customId === "cancel_firewall_operation") {
+        await interaction.editReply({
+          content: "Firewall operation cancelled.",
+          components: [],
+        });
+      }
+    }
+
+    // Handle modal submissions
+    else if (interaction.isModalSubmit()) {
+      const modalId = interaction.customId;
+
+      try {
+        // Handle WireGuard add peer modal
+        if (modalId.startsWith("wg_add_peer_modal_")) {
+          const wireguardMonitor = require("../utils/wireguardMonitor");
+          const interfaceName = modalId.replace("wg_add_peer_modal_", "");
+
+          // Get values from the modal
+          const peerName = interaction.fields.getTextInputValue("peer_name");
+          const publicKey = interaction.fields.getTextInputValue("public_key");
+          const allowedIPs =
+            interaction.fields.getTextInputValue("allowed_ips");
+          const endpoint = interaction.fields.getTextInputValue("endpoint");
+
+          // Prepare peer data
+          const peerData = {
+            name: peerName,
+            publicKey: publicKey.trim(),
+            allowedIPs: allowedIPs.trim(),
+          };
+
+          if (endpoint && endpoint.trim()) {
+            peerData.endpoint = endpoint.trim();
+          }
+
+          // Add the peer
+          await interaction.deferReply();
+
+          const result = await wireguardMonitor.addPeer(
+            interfaceName,
+            peerData
+          );
+          const embed = embedBuilder.createWireGuardOperationEmbed(
+            result,
+            "add-peer"
+          );
+
+          // Create buttons
+          const interfacesButton = new ButtonBuilder()
+            .setCustomId("refresh_wg_interfaces")
+            .setLabel("View Interfaces")
+            .setStyle(ButtonStyle.Primary);
+
+          const peersButton = new ButtonBuilder()
+            .setCustomId(`refresh_wg_peers_${interfaceName}`)
+            .setLabel("View Peers")
+            .setStyle(ButtonStyle.Secondary);
+
+          const row = new ActionRowBuilder().addComponents(
+            interfacesButton,
+            peersButton
+          );
+
+          await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+
+        // Handle other modal submissions here if needed
+      } catch (error) {
+        console.error("Error processing modal submission:", error);
+
+        try {
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+              content: "There was an error processing your submission.",
+              ephemeral: true,
+            });
+          } else {
+            await interaction.editReply({
+              content: "There was an error processing your submission.",
+            });
+          }
+        } catch (replyError) {
+          console.error("Error sending error message:", replyError);
+        }
+      }
     }
   },
 };
