@@ -3,6 +3,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ActionRowBuilder,
+  EmbedBuilder,
 } = require("discord.js");
 const tailscaleMonitor = require("../utils/tailscaleMonitor");
 const embedBuilder = require("../utils/embedBuilder");
@@ -50,6 +51,11 @@ module.exports = {
     )
     .addSubcommand((subcommand) =>
       subcommand.setName("stop").setDescription("Stop Tailscale service")
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("diagnose")
+        .setDescription("Diagnose network connectivity with Tailscale")
     ),
 
   async autocomplete(interaction) {
@@ -185,6 +191,8 @@ module.exports = {
           return await this.handleStart(interaction);
         case "stop":
           return await this.handleStop(interaction);
+        case "diagnose":
+          return await this.handleDiagnose(interaction);
         default:
           await interaction.editReply({ content: "Unknown subcommand." });
       }
@@ -484,6 +492,56 @@ module.exports = {
     }
   },
 
+  /**
+   * 處理網路診斷子命令
+   * @param {Interaction} interaction Discord 互動
+   */
+  async handleDiagnose(interaction) {
+    try {
+      await interaction.editReply({
+        content: "🔍 正在診斷網路連接，請稍候...",
+      });
+
+      const diagnoseResults = await tailscaleMonitor.diagnoseTailscaleNetwork();
+
+      // 使用專門的嵌入式消息函數
+      const embed =
+        embedBuilder.createTailscaleNetworkDiagnosticEmbed(diagnoseResults);
+
+      // 創建快速操作按鈕
+      const fixButton = new ButtonBuilder()
+        .setCustomId("tailscale_fix_network")
+        .setLabel("嘗試修復連接")
+        .setStyle(ButtonStyle.Primary);
+
+      const disableExitNodeButton = new ButtonBuilder()
+        .setCustomId("tailscale_disable_exit_node")
+        .setLabel("禁用 Exit Node")
+        .setStyle(ButtonStyle.Danger)
+        .setDisabled(!diagnoseResults.exitNodeStatus?.usingExitNode);
+
+      const row = new ActionRowBuilder().addComponents(
+        fixButton,
+        disableExitNodeButton
+      );
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: [row],
+        content: null,
+      });
+    } catch (error) {
+      console.error("[handleDiagnose] Error:", error);
+      try {
+        await interaction.editReply({
+          content: `Error during network diagnostics: ${error.message}`,
+        });
+      } catch (replyError) {
+        console.error("[handleDiagnose] Error sending reply:", replyError);
+      }
+    }
+  },
+
   // Handle button interactions for this command
   async handleInteraction(interaction) {
     const customId = interaction.customId;
@@ -648,6 +706,106 @@ module.exports = {
           console.error("[handleInteraction] Start error:", startError);
           await interaction.editReply({
             content: `Error starting Tailscale: ${startError.message}`,
+            components: [],
+          });
+        }
+        return true;
+      }
+
+      // Handle network fix button
+      else if (customId === "tailscale_fix_network") {
+        try {
+          await interaction.editReply({
+            content: "🔄 正在嘗試修復網絡連接...",
+            components: [],
+            embeds: [],
+          });
+
+          // 檢查是否在 Exit Node 模式
+          const status = await tailscaleMonitor.getStatus();
+          if (status.success && status.self.usingExitNode) {
+            // 獲取當前的 Exit Node
+            const exitNodeIP = status.self.exitNodeIP;
+            const matchingPeer = status.peers.find(
+              (peer) => peer.ip && peer.ip.includes(exitNodeIP)
+            );
+
+            if (matchingPeer) {
+              // 嘗試重新啟用 Exit Node，但這次添加 LAN access
+              const result = await tailscaleMonitor.enableExitNode(
+                matchingPeer.hostname,
+                exitNodeIP
+              );
+
+              if (result.success) {
+                await interaction.editReply({
+                  content:
+                    "✅ 已重新配置 Exit Node 以允許 LAN 訪問。請檢查連接是否恢復。",
+                  components: [],
+                });
+              } else {
+                await interaction.editReply({
+                  content: `❌ 嘗試修復失敗: ${result.error}`,
+                  components: [],
+                });
+              }
+            } else {
+              await interaction.editReply({
+                content:
+                  "❌ 無法找到當前的 Exit Node 來重新配置。請嘗試手動禁用 Exit Node。",
+                components: [],
+              });
+            }
+          } else {
+            // 非 Exit Node 問題，嘗試執行診斷
+            const diagnoseResults =
+              await tailscaleMonitor.diagnoseTailscaleNetwork();
+
+            await interaction.editReply({
+              content: diagnoseResults.success
+                ? "✅ 診斷完成，網絡連接正常。"
+                : "❌ 診斷發現問題。建議檢查路由和防火牆設置，或聯繫網絡管理員。",
+              components: [],
+            });
+          }
+        } catch (fixError) {
+          console.error("[handleInteraction] Fix network error:", fixError);
+          await interaction.editReply({
+            content: `❌ 修復過程中發生錯誤: ${fixError.message}`,
+            components: [],
+          });
+        }
+        return true;
+      }
+
+      // Handle disable exit node button
+      else if (customId === "tailscale_disable_exit_node") {
+        try {
+          await interaction.editReply({
+            content: "🔄 正在禁用 Exit Node...",
+            components: [],
+            embeds: [],
+          });
+
+          const result = await tailscaleMonitor.disableExitNode();
+          if (result.success) {
+            await interaction.editReply({
+              embeds: [embedBuilder.buildExitNodeEmbed("disabled", null)],
+              content: null,
+            });
+          } else {
+            await interaction.editReply({
+              content: `❌ 禁用 Exit Node 失敗: ${result.error}`,
+              components: [],
+            });
+          }
+        } catch (disableError) {
+          console.error(
+            "[handleInteraction] Disable exit node error:",
+            disableError
+          );
+          await interaction.editReply({
+            content: `❌ 禁用 Exit Node 時發生錯誤: ${disableError.message}`,
             components: [],
           });
         }

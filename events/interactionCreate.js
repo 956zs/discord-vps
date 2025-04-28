@@ -193,7 +193,9 @@ module.exports = {
         customId === "tailscale_network_stats" ||
         customId === "confirm_tailscale_stop" ||
         customId === "cancel_tailscale_stop" ||
-        customId === "confirm_tailscale_start"
+        customId === "confirm_tailscale_start" ||
+        customId === "tailscale_fix_network" ||
+        customId === "tailscale_disable_exit_node"
       ) {
         const tailscaleCommand = client.commands.get("tailscale");
         if (tailscaleCommand && tailscaleCommand.handleInteraction) {

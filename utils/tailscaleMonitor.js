@@ -1,6 +1,9 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns").promises;
+const http = require("http");
+const https = require("https");
 
 /**
  * Get the appropriate tailscale command for the current platform
@@ -370,9 +373,9 @@ async function enableExitNode(hostname, specifiedIp) {
       // Extract first IPv4 address from potentially multiple addresses
       const ipToUse = extractFirstIPv4(specifiedIp);
 
-      // Set up the exit node with the specified IP
+      // Set up the exit node with the specified IP - add lan access and accept routes flags
       const output = executeTailscaleCommand("up", {
-        args: `--exit-node=${ipToUse}`,
+        args: `--exit-node=${ipToUse} --exit-node-allow-lan-access --accept-routes`,
         timeout: 15000,
       });
 
@@ -400,9 +403,9 @@ async function enableExitNode(hostname, specifiedIp) {
         // Extract the first IPv4 address if there are multiple
         const exitNodeIP = extractFirstIPv4(matchedNode.ip);
 
-        // Set up the exit node
+        // Set up the exit node with LAN access and accept routes
         const output = executeTailscaleCommand("up", {
-          args: `--exit-node=${exitNodeIP}`,
+          args: `--exit-node=${exitNodeIP} --exit-node-allow-lan-access --accept-routes`,
           timeout: 15000,
         });
 
@@ -480,9 +483,9 @@ async function enableExitNode(hostname, specifiedIp) {
       `[enableExitNode] Setting up exit node: ${hostname} with IP: ${exitNodeIP}`
     );
 
-    // Set up the exit node
+    // Set up the exit node with LAN access and accept routes
     const output = executeTailscaleCommand("up", {
-      args: `--exit-node=${exitNodeIP}`,
+      args: `--exit-node=${exitNodeIP} --exit-node-allow-lan-access --accept-routes`,
       timeout: 15000,
     });
 
@@ -724,6 +727,196 @@ async function stopTailscale() {
   }
 }
 
+/**
+ * 診斷 Exit Node 模式下的網路連接
+ * @returns {Promise<Object>} 診斷結果
+ */
+async function diagnoseTailscaleNetwork() {
+  const results = {
+    timestamp: new Date().toISOString(),
+    exitNodeStatus: {},
+    discordApiCheck: {},
+    dnsResolution: {},
+    routeCheck: {},
+    pingTests: {},
+    success: false,
+  };
+
+  try {
+    // 檢查 Exit Node 狀態
+    const status = await getStatus();
+    if (status.success) {
+      results.exitNodeStatus = {
+        success: true,
+        usingExitNode: status.self.usingExitNode,
+        exitNodeIP: status.self.exitNodeIP,
+      };
+    } else {
+      results.exitNodeStatus = {
+        success: false,
+        error: "無法獲取 Tailscale 狀態",
+      };
+    }
+
+    // 測試 DNS 解析
+    try {
+      const discordResolve = await dns.resolve4("discord.com");
+      results.dnsResolution.discord = {
+        success: true,
+        addresses: discordResolve,
+      };
+    } catch (dnsError) {
+      results.dnsResolution.discord = {
+        success: false,
+        error: dnsError.message,
+      };
+    }
+
+    // 測試 Discord API 連接
+    const discordApiPromise = new Promise((resolve) => {
+      const req = https
+        .get("https://discord.com/api/v10/gateway", (res) => {
+          let data = "";
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            resolve({
+              success: true,
+              statusCode: res.statusCode,
+              responseTime: Date.now() - startTime,
+            });
+          });
+        })
+        .on("error", (err) => {
+          resolve({ success: false, error: err.message });
+        });
+
+      const startTime = Date.now();
+      req.setTimeout(5000, () => {
+        req.abort();
+        resolve({ success: false, error: "Request timeout" });
+      });
+    });
+
+    results.discordApiCheck = await discordApiPromise;
+
+    // 執行路由追蹤，查看流量路徑
+    try {
+      let traceOutput;
+      if (process.platform === "win32") {
+        traceOutput = execSync("tracert -d -h 15 discord.com", {
+          timeout: 15000,
+        }).toString();
+      } else {
+        traceOutput = execSync("traceroute -n -m 15 discord.com", {
+          timeout: 15000,
+        }).toString();
+      }
+      results.routeCheck = { success: true, trace: traceOutput };
+    } catch (traceError) {
+      results.routeCheck = {
+        success: false,
+        error: traceError.message,
+      };
+    }
+
+    // 執行 ping 測試
+    const pingTargets = ["8.8.8.8", "discord.com"];
+    for (const target of pingTargets) {
+      try {
+        let pingOutput;
+        if (process.platform === "win32") {
+          pingOutput = execSync(`ping -n 4 ${target}`, {
+            timeout: 10000,
+          }).toString();
+        } else {
+          pingOutput = execSync(`ping -c 4 ${target}`, {
+            timeout: 10000,
+          }).toString();
+        }
+
+        // 嘗試提取平均響應時間
+        let avgTime = "unknown";
+        if (process.platform === "win32") {
+          // Windows 格式
+          const avgMatch = pingOutput.match(/Average = ([0-9]+)ms/);
+          if (avgMatch && avgMatch[1]) {
+            avgTime = `${avgMatch[1]} ms`;
+          }
+        } else {
+          // Linux/Unix 格式
+          const avgMatch = pingOutput.match(
+            /min\/avg\/max\/.+\s=\s[\d.]+\/([0-9.]+)\/[\d.]+/
+          );
+          if (avgMatch && avgMatch[1]) {
+            avgTime = `${avgMatch[1]} ms`;
+          }
+        }
+
+        results.pingTests[target] = {
+          success: true,
+          averageTime: avgTime,
+        };
+      } catch (pingError) {
+        results.pingTests[target] = {
+          success: false,
+          error: pingError.message,
+        };
+      }
+    }
+
+    // 整體評估
+    const discordConnectivity =
+      results.discordApiCheck.success || results.dnsResolution.discord.success;
+    const networkConnectivity = Object.values(results.pingTests).some(
+      (r) => r.success
+    );
+
+    results.success = discordConnectivity && networkConnectivity;
+    results.summary = {
+      usingExitNode: results.exitNodeStatus.usingExitNode,
+      discordConnectivity: discordConnectivity,
+      networkConnectivity: networkConnectivity,
+      recommendations: [],
+    };
+
+    // 提供建議
+    if (results.exitNodeStatus.usingExitNode && !discordConnectivity) {
+      results.summary.recommendations.push(
+        "Exit Node 可能阻礙了 Discord API 連接，請嘗試添加 --exit-node-allow-lan-access 參數"
+      );
+      results.summary.recommendations.push(
+        "或嘗試臨時禁用 Exit Node 來解決問題"
+      );
+    }
+
+    if (!networkConnectivity) {
+      results.summary.recommendations.push(
+        "網絡連接性問題，建議檢查防火牆設置或 DNS 配置"
+      );
+    }
+
+    if (
+      results.dnsResolution.discord.success &&
+      !results.discordApiCheck.success
+    ) {
+      results.summary.recommendations.push(
+        "DNS 解析正常但 API 連接失敗，可能是連接超時或被阻擋"
+      );
+    }
+
+    return results;
+  } catch (error) {
+    console.error("Error in network diagnostics:", error);
+    return {
+      success: false,
+      error: error.message,
+      recommendations: ["執行診斷時發生錯誤，請稍後再試"],
+    };
+  }
+}
+
 module.exports = {
   getStatus,
   enableExitNode,
@@ -733,4 +926,5 @@ module.exports = {
   stopTailscale,
   getExitNodesList,
   extractFirstIPv4,
+  diagnoseTailscaleNetwork,
 };

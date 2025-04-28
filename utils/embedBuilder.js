@@ -1412,6 +1412,123 @@ function buildExitNodeEmbed(status, nodeInfo) {
   return embed;
 }
 
+/**
+ * 創建 Tailscale 網路診斷嵌入信息
+ * @param {Object} diagnosticData 診斷數據
+ * @returns {EmbedBuilder} Discord 嵌入
+ */
+function createTailscaleNetworkDiagnosticEmbed(diagnosticData) {
+  const embed = new EmbedBuilder()
+    .setColor(diagnosticData.success ? "#4CAF50" : "#F44336")
+    .setTitle("🌐 Tailscale 網路診斷")
+    .setDescription(
+      diagnosticData.success
+        ? "✅ 診斷完成，網路連接正常"
+        : "⚠️ 診斷完成，發現潛在問題"
+    )
+    .setTimestamp();
+
+  // Exit Node 狀態
+  const exitNodeStatus = diagnosticData.exitNodeStatus;
+  if (exitNodeStatus) {
+    embed.addFields({
+      name: "Exit Node 狀態",
+      value: exitNodeStatus.success
+        ? `${exitNodeStatus.usingExitNode ? "✅ 啟用中" : "❌ 已禁用"}${
+            exitNodeStatus.exitNodeIP
+              ? `\nIP: \`${exitNodeStatus.exitNodeIP}\``
+              : ""
+          }`
+        : "❌ 無法獲取狀態",
+      inline: true,
+    });
+  }
+
+  // Discord API 連接
+  const discordApiCheck = diagnosticData.discordApiCheck;
+  if (discordApiCheck) {
+    embed.addFields({
+      name: "Discord API 連接",
+      value: discordApiCheck.success
+        ? `✅ 正常 (${discordApiCheck.statusCode})\n響應時間: ${discordApiCheck.responseTime}ms`
+        : `❌ 失敗: ${discordApiCheck.error || "未知錯誤"}`,
+      inline: true,
+    });
+  }
+
+  // DNS 解析
+  const dnsResolution = diagnosticData.dnsResolution?.discord;
+  if (dnsResolution) {
+    embed.addFields({
+      name: "DNS 解析",
+      value: dnsResolution.success
+        ? `✅ 正常\n${dnsResolution.addresses?.join(", ") || ""}`
+        : `❌ 失敗: ${dnsResolution.error || "未知錯誤"}`,
+      inline: true,
+    });
+  }
+
+  // Ping 測試結果
+  let pingResults = "";
+  if (diagnosticData.pingTests) {
+    for (const [target, result] of Object.entries(diagnosticData.pingTests)) {
+      pingResults += `${result.success ? "✅" : "❌"} ${target}: ${
+        result.success ? result.averageTime : result.error
+      }\n`;
+    }
+
+    if (pingResults) {
+      embed.addFields({
+        name: "Ping 測試",
+        value: pingResults,
+        inline: false,
+      });
+    }
+  }
+
+  // 路由追蹤
+  if (diagnosticData.routeCheck) {
+    const routeCheck = diagnosticData.routeCheck;
+    if (routeCheck.success && routeCheck.trace) {
+      // 從路由追蹤結果中提取前幾行
+      const traceSummary =
+        routeCheck.trace.split("\n").slice(0, 5).join("\n") +
+        (routeCheck.trace.split("\n").length > 5
+          ? "\n...(更多路由跳轉省略)"
+          : "");
+
+      embed.addFields({
+        name: "路由追蹤摘要",
+        value: `\`\`\`\n${traceSummary}\n\`\`\``,
+        inline: false,
+      });
+    } else if (!routeCheck.success) {
+      embed.addFields({
+        name: "路由追蹤",
+        value: `❌ 失敗: ${routeCheck.error || "未知錯誤"}`,
+        inline: false,
+      });
+    }
+  }
+
+  // 建議
+  if (
+    diagnosticData.summary &&
+    diagnosticData.summary.recommendations &&
+    diagnosticData.summary.recommendations.length > 0
+  ) {
+    embed.addFields({
+      name: "🔧 建議",
+      value: diagnosticData.summary.recommendations
+        .map((r) => `• ${r}`)
+        .join("\n"),
+      inline: false,
+    });
+  }
+
+  return embed;
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -1439,4 +1556,6 @@ module.exports = {
   createTailscaleOperationEmbed,
   // Add buildExitNodeEmbed to exports
   buildExitNodeEmbed,
+  // Network diagnostics
+  createTailscaleNetworkDiagnosticEmbed,
 };
