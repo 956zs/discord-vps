@@ -1370,42 +1370,18 @@ function formatLastSeen(isoDate) {
  * @param {Object} nodeInfo Information about the exit node (null if disabled)
  * @returns {EmbedBuilder} Discord embed
  */
-function buildExitNodeEmbed(status, nodeInfo) {
+function buildExitNodeEmbed(status, hostname = null) {
   const embed = new EmbedBuilder()
-    .setColor(status === "enabled" ? "#4CAF50" : "#41BEE9")
+    .setColor(status === "enabled" ? "#00ff00" : "#ff0000")
+    .setTitle(
+      status === "enabled" ? "✅ Exit Node Enabled" : "❌ Exit Node Disabled"
+    )
+    .setDescription(
+      status === "enabled"
+        ? `Exit node has been enabled using ${hostname}.`
+        : "Exit node has been disabled."
+    )
     .setTimestamp();
-
-  if (status === "enabled" && nodeInfo) {
-    embed
-      .setTitle("✅ Exit Node Enabled")
-      .setDescription(
-        `Successfully connected to exit node: **${nodeInfo.hostname}**`
-      );
-
-    if (nodeInfo.ip) {
-      embed.addFields({ name: "Exit Node IP", value: `\`${nodeInfo.ip}\`` });
-    }
-
-    if (nodeInfo.os) {
-      embed.addFields({
-        name: "Operating System",
-        value: nodeInfo.os,
-        inline: true,
-      });
-    }
-
-    if (nodeInfo.exitNodeType) {
-      embed.addFields({
-        name: "Exit Node Type",
-        value: nodeInfo.exitNodeType,
-        inline: true,
-      });
-    }
-  } else {
-    embed
-      .setTitle("❌ Exit Node Disabled")
-      .setDescription("Exit node functionality has been turned off.");
-  }
 
   return embed;
 }

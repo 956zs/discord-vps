@@ -290,107 +290,44 @@ module.exports = {
   },
 
   async handleExitNode(interaction) {
+    const action = interaction.options.getString("action");
+    const hostname = interaction.options.getString("hostname");
+
     try {
-      const hostname = interaction.options.getString("hostname");
-
-      // 特殊值處理
-      if (!hostname || hostname === "none") {
-        console.log("[handleExitNode] Disabling exit node");
+      if (action === "off") {
         const result = await tailscaleMonitor.disableExitNode();
-
         if (result.success) {
-          await interaction.editReply({
-            embeds: [embedBuilder.buildExitNodeEmbed("disabled", null)],
-          });
+          const embed = embedBuilder.buildExitNodeEmbed("disabled");
+          await interaction.reply({ embeds: [embed] });
         } else {
-          await interaction.editReply({
-            content: `Failed to disable exit node: ${result.error}`,
+          await interaction.reply({
+            content: "Failed to disable exit node. Please try again later.",
             ephemeral: true,
           });
         }
-        return;
-      }
-
-      if (
-        hostname === "error" ||
-        hostname === "offline" ||
-        hostname === "no-exit-nodes"
-      ) {
-        await interaction.editReply({
-          content: "Please select a valid exit node from the dropdown list.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      console.log(`[handleExitNode] Setting exit node to: ${hostname}`);
-
-      // 先嘗試使用專用 API 獲取 exit nodes 列表
-      const exitNodesList = await tailscaleMonitor.getExitNodesList();
-
-      let targetNode = null;
-
-      // 如果 API 返回結果，使用它來查找目標節點
-      if (exitNodesList.length > 0) {
-        targetNode = exitNodesList.find((node) => node.hostname === hostname);
-        console.log(
-          `[handleExitNode] 從專用 API 查找節點 ${hostname}: ${
-            targetNode ? "找到" : "未找到"
-          }`
-        );
-      }
-
-      // 如果 API 未找到，使用常規 status 查找
-      if (!targetNode) {
-        console.log(`[handleExitNode] 從常規 status 查找節點 ${hostname}`);
-        const status = await tailscaleMonitor.getStatus();
-
-        if (!status.success) {
-          await interaction.editReply({
-            content: `Failed to get Tailscale status: ${status.error}`,
+      } else if (action === "on") {
+        if (!hostname) {
+          await interaction.reply({
+            content: "Please provide a hostname to enable the exit node.",
             ephemeral: true,
           });
           return;
         }
-
-        // 查找對應的 peer
-        targetNode = status.peers.find((peer) => peer.hostname === hostname);
-      }
-
-      // 檢查是否找到了目標節點
-      if (!targetNode) {
-        console.log(`[handleExitNode] 無法找到節點 ${hostname}`);
-        await interaction.editReply({
-          content: `Could not find a node with hostname: ${hostname}`,
-          ephemeral: true,
-        });
-        return;
-      }
-
-      console.log(
-        `[handleExitNode] 使用節點 ${targetNode.hostname} (${targetNode.ip})`
-      );
-
-      // 激活 exit node
-      const result = await tailscaleMonitor.enableExitNode(
-        hostname,
-        targetNode.ip
-      );
-
-      if (result.success) {
-        await interaction.editReply({
-          embeds: [embedBuilder.buildExitNodeEmbed("enabled", targetNode)],
-        });
-      } else {
-        await interaction.editReply({
-          content: `Failed to set exit node: ${result.error}`,
-          ephemeral: true,
-        });
+        const result = await tailscaleMonitor.enableExitNode(hostname);
+        if (result.success) {
+          const embed = embedBuilder.buildExitNodeEmbed("enabled", hostname);
+          await interaction.reply({ embeds: [embed] });
+        } else {
+          await interaction.reply({
+            content: "Failed to enable exit node. Please try again later.",
+            ephemeral: true,
+          });
+        }
       }
     } catch (error) {
-      console.error("[handleExitNode] Error:", error);
-      await interaction.editReply({
-        content: `An error occurred: ${error.message}`,
+      console.error("Error handling exit node:", error);
+      await interaction.reply({
+        content: "An error occurred while handling the exit node request.",
         ephemeral: true,
       });
     }

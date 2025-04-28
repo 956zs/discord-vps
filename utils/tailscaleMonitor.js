@@ -675,7 +675,7 @@ async function disableExitNode() {
 
     // Execute the command to disable the exit node
     const output = executeTailscaleCommand("up", {
-      args: `--exit-node=""`,
+      args: `--exit-node=`,
       timeout: 15000,
     });
 
@@ -691,7 +691,7 @@ async function disableExitNode() {
     return {
       success: false,
       error: error.message,
-      command: 'tailscale up --exit-node=""',
+      command: "tailscale up --exit-node=",
     };
   }
 }
