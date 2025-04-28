@@ -1364,6 +1364,52 @@ function formatLastSeen(isoDate) {
   }
 }
 
+/**
+ * Creates an embed for Tailscale exit node operation results
+ * @param {string} status Status of the operation (enabled/disabled)
+ * @param {Object} nodeInfo Information about the exit node (null if disabled)
+ * @returns {EmbedBuilder} Discord embed
+ */
+function buildExitNodeEmbed(status, nodeInfo) {
+  const embed = new EmbedBuilder()
+    .setColor(status === "enabled" ? "#4CAF50" : "#41BEE9")
+    .setTimestamp();
+
+  if (status === "enabled" && nodeInfo) {
+    embed
+      .setTitle("✅ Exit Node Enabled")
+      .setDescription(
+        `Successfully connected to exit node: **${nodeInfo.hostname}**`
+      );
+
+    if (nodeInfo.ip) {
+      embed.addFields({ name: "Exit Node IP", value: `\`${nodeInfo.ip}\`` });
+    }
+
+    if (nodeInfo.os) {
+      embed.addFields({
+        name: "Operating System",
+        value: nodeInfo.os,
+        inline: true,
+      });
+    }
+
+    if (nodeInfo.exitNodeType) {
+      embed.addFields({
+        name: "Exit Node Type",
+        value: nodeInfo.exitNodeType,
+        inline: true,
+      });
+    }
+  } else {
+    embed
+      .setTitle("❌ Exit Node Disabled")
+      .setDescription("Exit node functionality has been turned off.");
+  }
+
+  return embed;
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -1389,4 +1435,6 @@ module.exports = {
   createTailscaleStatusEmbed,
   createTailscaleNetStatsEmbed,
   createTailscaleOperationEmbed,
+  // Add buildExitNodeEmbed to exports
+  buildExitNodeEmbed,
 };

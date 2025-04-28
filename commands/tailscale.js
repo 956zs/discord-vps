@@ -62,6 +62,36 @@ module.exports = {
           focusedOption.value
         );
 
+        // 先嘗試使用專用 API 獲取 exit nodes 列表
+        const exitNodesList = await tailscaleMonitor.getExitNodesList();
+        console.log(
+          `[autocomplete] 專用 API 返回了 ${exitNodesList.length} 個 exit nodes`
+        );
+
+        if (exitNodesList.length > 0) {
+          // 直接使用 exitNodesList 作為選項
+          const options = exitNodesList.map((node) => ({
+            name: `${node.hostname} (${node.ip || "unknown IP"})`,
+            value: node.hostname,
+          }));
+
+          // 過濾基於用戶輸入
+          const filtered = options.filter((choice) =>
+            choice.name
+              .toLowerCase()
+              .includes(focusedOption.value.toLowerCase())
+          );
+
+          console.log(
+            `[autocomplete] 從專用 API 返回 ${filtered.length} 個過濾後的 exit nodes`
+          );
+          await interaction.respond(filtered);
+          return;
+        }
+
+        // 如果專用 API 未返回任何結果，使用常規方法
+        console.log("[autocomplete] 專用 API 未返回結果，使用常規方法");
+
         // Get all available nodes
         const status = await tailscaleMonitor.getStatus();
 
@@ -73,16 +103,8 @@ module.exports = {
           return;
         }
 
-        // 詳細記錄所有 peers
-        console.log(`[autocomplete] All peers (${status.peers.length}):`);
-        status.peers.forEach((peer) => {
-          console.log(`- Peer: ${peer.hostname}`);
-          console.log(`  Online: ${peer.online}`);
-          console.log(`  Exit Node: ${peer.exitNode}`);
-          console.log(`  Exit Node Type: ${peer.exitNodeType || "none"}`);
-          console.log(`  OS: ${peer.os}`);
-          console.log(`  IP: ${peer.ip}`);
-        });
+        // 記錄狀態
+        console.log(`[autocomplete] 獲取到 ${status.peers.length} 個 peers`);
 
         // Filter nodes that can be exit nodes and are online
         const exitNodes = status.peers
@@ -93,24 +115,30 @@ module.exports = {
           }));
 
         console.log(
-          `[autocomplete] Found ${exitNodes.length} eligible exit nodes`
+          `[autocomplete] 找到 ${exitNodes.length} 個符合條件的 exit nodes`
         );
-
-        // 調試：詳細打印找到的 exit nodes
         exitNodes.forEach((node) => {
-          console.log(`- Exit node option: ${node.name} => ${node.value}`);
+          console.log(`- Exit node: ${node.name}`);
         });
 
+        // 如果沒有找到 exit nodes，檢查原因並給出特定訊息
         if (exitNodes.length === 0) {
-          console.log(
-            "[autocomplete] No eligible exit nodes found for autocomplete"
-          );
+          console.log("[autocomplete] 未找到符合條件的 exit nodes，檢查原因");
+
+          // 為所有 peers 添加使用者友好的顯示
+          status.peers.forEach((peer) => {
+            console.log(
+              `[autocomplete] ${peer.hostname}: exitNode=${
+                peer.exitNode
+              }, online=${peer.online}, type=${peer.exitNodeType || "none"}`
+            );
+          });
 
           // 檢查是否有任何 peers 是 exit node（不考慮在線狀態）
           const anyExitNodes = status.peers.filter((peer) => peer.exitNode);
           if (anyExitNodes.length > 0) {
             console.log(
-              `[autocomplete] Found ${anyExitNodes.length} exit nodes, but they are offline`
+              `[autocomplete] 找到 ${anyExitNodes.length} 個 exit nodes，但它們離線`
             );
             await interaction.respond([
               {
@@ -121,10 +149,30 @@ module.exports = {
             return;
           }
 
-          // 檢查是否有任何 peers 但都不是 exit node
+          // 添加一個選項來手動指定一個 peer 作為 exit node（如果有 peers）
           if (status.peers.length > 0) {
+            const onlinePeers = status.peers.filter((peer) => peer.online);
+            if (onlinePeers.length > 0) {
+              const options = onlinePeers.map((peer) => ({
+                name: `Try: ${peer.hostname} (${peer.ip || "unknown IP"})`,
+                value: peer.hostname,
+              }));
+
+              console.log(
+                `[autocomplete] 提供 ${options.length} 個在線的 peers 作為可能的選項`
+              );
+              await interaction.respond([
+                {
+                  name: "No detected exit nodes, but you can try these online peers:",
+                  value: "try_online",
+                },
+                ...options,
+              ]);
+              return;
+            }
+
             console.log(
-              `[autocomplete] Found ${status.peers.length} peers, but none are exit nodes`
+              `[autocomplete] 找到 ${status.peers.length} 個 peers，但沒有檢測到 exit node 功能`
             );
             await interaction.respond([
               {
@@ -147,7 +195,7 @@ module.exports = {
         );
 
         console.log(
-          `[autocomplete] Returning ${filtered.length} filtered exit nodes`
+          `[autocomplete] 返回 ${filtered.length} 個過濾後的 exit nodes`
         );
         await interaction.respond(filtered);
       } catch (error) {
@@ -242,100 +290,111 @@ module.exports = {
   },
 
   async handleExitNode(interaction) {
-    const action = interaction.options.getString("action");
+    await interaction.deferReply({ ephemeral: true });
 
-    // For 'on' action, we need a hostname
-    if (action === "on") {
+    try {
       const hostname = interaction.options.getString("hostname");
 
-      if (!hostname) {
-        // 獲取所有可用的 exit nodes 並顯示給用戶
-        const status = await tailscaleMonitor.getStatus();
+      // 特殊值處理
+      if (!hostname || hostname === "none") {
+        console.log("[handleExitNode] Disabling exit node");
+        const result = await tailscaleMonitor.disableExitNode();
 
-        if (!status.success) {
+        if (result.success) {
           await interaction.editReply({
-            content: `Unable to get Tailscale status: ${status.error}`,
+            embeds: [embedBuilder.buildExitNodeEmbed("disabled", null)],
           });
-          return;
-        }
-
-        const eligibleExitNodes = status.peers.filter(
-          (p) => p.exitNode && p.online
-        );
-
-        if (eligibleExitNodes.length === 0) {
+        } else {
           await interaction.editReply({
-            content:
-              "You must specify a valid hostname when enabling an exit node, but no eligible exit nodes were found. Ensure that some machines have exit node capability enabled in Tailscale admin.",
+            content: `Failed to disable exit node: ${result.error}`,
+            ephemeral: true,
           });
-          return;
         }
-
-        // 顯示可用的 exit nodes 給用戶
-        const availableNodes = eligibleExitNodes
-          .map((p) => `- ${p.hostname} (${p.ip})`)
-          .join("\n");
-
-        await interaction.editReply({
-          content: `You must specify a valid hostname when enabling an exit node. Available exit nodes:\n\n${availableNodes}\n\nTry again with: \`/tailscale exit-node on <hostname>\``,
-        });
         return;
       }
 
       if (
         hostname === "error" ||
-        hostname === "none" ||
-        hostname === "offline"
+        hostname === "offline" ||
+        hostname === "no-exit-nodes"
       ) {
-        const messageMap = {
-          error:
-            "There was an error retrieving exit nodes. Please check the server logs.",
-          none: "No eligible exit nodes were found. Ensure that some machines have exit node capability enabled in Tailscale admin.",
-          offline:
-            "Found exit nodes but they are currently offline. Please wait for them to come online.",
-        };
-
         await interaction.editReply({
-          content: messageMap[hostname] || "Invalid hostname selection.",
+          content: "Please select a valid exit node from the dropdown list.",
+          ephemeral: true,
         });
         return;
       }
 
-      const result = await tailscaleMonitor.enableExitNode(hostname);
-      const embed = embedBuilder.createTailscaleOperationEmbed(
-        result,
-        "enable-exit-node"
+      console.log(`[handleExitNode] Setting exit node to: ${hostname}`);
+
+      // 先嘗試使用專用 API 獲取 exit nodes 列表
+      const exitNodesList = await tailscaleMonitor.getExitNodesList();
+
+      let targetNode = null;
+
+      // 如果 API 返回結果，使用它來查找目標節點
+      if (exitNodesList.length > 0) {
+        targetNode = exitNodesList.find((node) => node.hostname === hostname);
+        console.log(
+          `[handleExitNode] 從專用 API 查找節點 ${hostname}: ${
+            targetNode ? "找到" : "未找到"
+          }`
+        );
+      }
+
+      // 如果 API 未找到，使用常規 status 查找
+      if (!targetNode) {
+        console.log(`[handleExitNode] 從常規 status 查找節點 ${hostname}`);
+        const status = await tailscaleMonitor.getStatus();
+
+        if (!status.success) {
+          await interaction.editReply({
+            content: `Failed to get Tailscale status: ${status.error}`,
+            ephemeral: true,
+          });
+          return;
+        }
+
+        // 查找對應的 peer
+        targetNode = status.peers.find((peer) => peer.hostname === hostname);
+      }
+
+      // 檢查是否找到了目標節點
+      if (!targetNode) {
+        console.log(`[handleExitNode] 無法找到節點 ${hostname}`);
+        await interaction.editReply({
+          content: `Could not find a node with hostname: ${hostname}`,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      console.log(
+        `[handleExitNode] 使用節點 ${targetNode.hostname} (${targetNode.ip})`
       );
 
-      // Create buttons
-      const statusButton = new ButtonBuilder()
-        .setCustomId("tailscale_status")
-        .setLabel("View Status")
-        .setStyle(ButtonStyle.Primary);
-
-      const row = new ActionRowBuilder().addComponents(statusButton);
-
-      await interaction.editReply({ embeds: [embed], components: [row] });
-    }
-    // For 'off' action, we disable the exit node
-    else if (action === "off") {
-      const result = await tailscaleMonitor.disableExitNode();
-      const embed = embedBuilder.createTailscaleOperationEmbed(
-        result,
-        "disable-exit-node"
+      // 激活 exit node
+      const result = await tailscaleMonitor.enableExitNode(
+        hostname,
+        targetNode.ip
       );
 
-      // Create buttons
-      const statusButton = new ButtonBuilder()
-        .setCustomId("tailscale_status")
-        .setLabel("View Status")
-        .setStyle(ButtonStyle.Primary);
-
-      const row = new ActionRowBuilder().addComponents(statusButton);
-
-      await interaction.editReply({ embeds: [embed], components: [row] });
-    } else {
-      await interaction.editReply({ content: "Invalid action specified." });
+      if (result.success) {
+        await interaction.editReply({
+          embeds: [embedBuilder.buildExitNodeEmbed("enabled", targetNode)],
+        });
+      } else {
+        await interaction.editReply({
+          content: `Failed to set exit node: ${result.error}`,
+          ephemeral: true,
+        });
+      }
+    } catch (error) {
+      console.error("[handleExitNode] Error:", error);
+      await interaction.editReply({
+        content: `An error occurred: ${error.message}`,
+        ephemeral: true,
+      });
     }
   },
 

@@ -50,24 +50,57 @@ async function getStatus() {
       console.log("Self.HostName:", statusData.Self.HostName);
       console.log("Self.OS:", statusData.Self.OS);
       console.log("Self.CanExitNode:", statusData.Self.CanExitNode);
+
+      // 詳細打印 Self 物件的所有屬性和值
+      console.log("==== Self Object Full Structure ====");
+      Object.keys(statusData.Self).forEach((key) => {
+        if (
+          typeof statusData.Self[key] === "object" &&
+          statusData.Self[key] !== null
+        ) {
+          console.log(
+            `Self.${key} (object):`,
+            JSON.stringify(statusData.Self[key], null, 2)
+          );
+        } else {
+          console.log(`Self.${key}:`, statusData.Self[key]);
+        }
+      });
     }
 
     if (statusData.Peer) {
       console.log("Number of peers:", Object.keys(statusData.Peer).length);
 
-      // 遍歷每個 peer，檢查是否有 ExitNode 屬性
+      // 遍歷每個 peer，檢查完整結構
       for (const [id, peer] of Object.entries(statusData.Peer)) {
-        console.log(`Peer ${peer.HostName}:`);
-        console.log(`  ID: ${id}`);
-        console.log(`  Online: ${peer.Online}`);
-        console.log(`  ExitNode: ${peer.ExitNode}`);
-        console.log(`  OS: ${peer.OS}`);
         console.log(
-          `  IPs: ${peer.TailscaleIPs ? peer.TailscaleIPs.join(", ") : "None"}`
+          `\n==== PEER FULL STRUCTURE: ${peer.HostName || "Unnamed"} ====`
         );
+        console.log(`ID: ${id}`);
 
-        // 列出所有 peer 屬性，確保我們沒有遺漏任何重要信息
-        console.log(`  All properties: ${Object.keys(peer).join(", ")}`);
+        // 打印 peer 的所有屬性和值
+        Object.keys(peer).forEach((key) => {
+          if (typeof peer[key] === "object" && peer[key] !== null) {
+            console.log(`${key} (object):`, JSON.stringify(peer[key], null, 2));
+          } else {
+            console.log(`${key}:`, peer[key]);
+          }
+        });
+
+        // 特別關注可能與 Exit Node 有關的屬性
+        console.log(`\nExit Node Related Properties for ${peer.HostName}:`);
+        console.log(`ExitNode:`, peer.ExitNode);
+        console.log(`CanExitNode:`, peer.CanExitNode);
+        console.log(`IsExitNode:`, peer.IsExitNode);
+        console.log(`AllowedIPs:`, peer.AllowedIPs);
+
+        if (peer.Capabilities) {
+          console.log(`Capabilities:`, peer.Capabilities);
+        }
+
+        if (peer.CapMap) {
+          console.log(`CapMap:`, peer.CapMap);
+        }
       }
     }
     console.log("===== TAILSCALE DEBUG END =====");
@@ -105,29 +138,103 @@ async function getStatus() {
     if (statusData.Peer) {
       // Process each peer in the status
       for (const [id, peer] of Object.entries(statusData.Peer)) {
-        // 檢查 ExitNode 屬性，考慮可能的變種和其他方式
-        // Tailscale 可能使用 ExitNode、IsExitNode、CanExitNode 或其他屬性名稱
-        const isExitNode =
-          !!peer.ExitNode ||
-          !!peer.IsExitNode ||
-          !!peer.CanExitNode ||
-          (peer.Tags && peer.Tags.includes("exit-node")) ||
-          (peer.Capabilities && peer.Capabilities.includes("exit-node"));
+        // 增強版的 Exit Node 判斷邏輯
+        let isExitNode = false;
+        let exitNodeReason = null;
 
-        // 檢查是否是正確的 Exit Node 類型 - 這是為了偵錯
-        let exitNodeType = null;
-        if (peer.ExitNode) exitNodeType = "ExitNode";
-        else if (peer.IsExitNode) exitNodeType = "IsExitNode";
-        else if (peer.CanExitNode) exitNodeType = "CanExitNode";
-        else if (peer.Tags && peer.Tags.includes("exit-node"))
-          exitNodeType = "Tags";
-        else if (peer.Capabilities && peer.Capabilities.includes("exit-node"))
-          exitNodeType = "Capabilities";
+        // 檢查各種可能的 Exit Node 標識方式
+        if (peer.ExitNode) {
+          isExitNode = true;
+          exitNodeReason = "ExitNode";
+        } else if (peer.IsExitNode) {
+          isExitNode = true;
+          exitNodeReason = "IsExitNode";
+        } else if (peer.CanExitNode) {
+          isExitNode = true;
+          exitNodeReason = "CanExitNode";
+        } else if (peer.AdvertisesExitNode) {
+          isExitNode = true;
+          exitNodeReason = "AdvertisesExitNode";
+        } else if (
+          peer.AllowedIPs &&
+          (peer.AllowedIPs.includes("0.0.0.0/0") ||
+            peer.AllowedIPs.includes("::/0"))
+        ) {
+          // 如果 AllowedIPs 包含預設路由，這通常表示它可以作為 Exit Node
+          isExitNode = true;
+          exitNodeReason = "AllowedIPs";
+        }
 
+        // 檢查 Capabilities 陣列
+        if (!isExitNode && peer.Capabilities) {
+          if (
+            typeof peer.Capabilities === "object" &&
+            Array.isArray(peer.Capabilities)
+          ) {
+            if (
+              peer.Capabilities.includes("exit-node") ||
+              peer.Capabilities.includes("route") ||
+              peer.Capabilities.includes("subnet-router")
+            ) {
+              isExitNode = true;
+              exitNodeReason = "Capabilities";
+            }
+          }
+        }
+
+        // 檢查 CapMap 對象
+        if (!isExitNode && peer.CapMap) {
+          if (typeof peer.CapMap === "object") {
+            if (
+              peer.CapMap["exit-node"] ||
+              peer.CapMap["route"] ||
+              peer.CapMap["subnet-router"]
+            ) {
+              isExitNode = true;
+              exitNodeReason = "CapMap";
+            }
+          }
+        }
+
+        // 檢查 Tags 陣列
+        if (!isExitNode && peer.Tags) {
+          if (typeof peer.Tags === "object" && Array.isArray(peer.Tags)) {
+            if (
+              peer.Tags.includes("exit-node") ||
+              peer.Tags.includes("exit_node") ||
+              peer.Tags.includes("route")
+            ) {
+              isExitNode = true;
+              exitNodeReason = "Tags";
+            }
+          }
+        }
+
+        // 檢查 StableID
+        if (!isExitNode && peer.StableID && peer.StableID.startsWith("exit_")) {
+          isExitNode = true;
+          exitNodeReason = "StableID";
+        }
+
+        // 基於設備名稱的啟發式檢查（最後手段）
+        if (!isExitNode) {
+          const hostname = peer.HostName || "";
+          if (
+            hostname.toLowerCase().includes("exit") ||
+            hostname.toLowerCase().includes("router") ||
+            hostname.toLowerCase().includes("gateway")
+          ) {
+            console.log(`[getStatus] 根據主機名，${hostname} 可能是 Exit Node`);
+          }
+        }
+
+        // 打印结果
         if (isExitNode) {
           console.log(
-            `${peer.HostName} 具有 Exit Node 功能，識別為: ${exitNodeType}`
+            `[getStatus] 發現 Exit Node: ${peer.HostName}, 識別方式: ${exitNodeReason}`
           );
+        } else {
+          console.log(`[getStatus] ${peer.HostName} 不是 Exit Node`);
         }
 
         const peerInfo = {
@@ -136,7 +243,7 @@ async function getStatus() {
           ip: peer.TailscaleIPs ? peer.TailscaleIPs.join(", ") : "",
           os: peer.OS,
           exitNode: isExitNode, // 使用擴展的檢測邏輯
-          exitNodeType: exitNodeType, // 記錄識別方式，幫助調試
+          exitNodeType: exitNodeReason, // 記錄識別方式，幫助調試
           online: !!peer.Online,
           lastSeen: peer.LastSeen
             ? new Date(peer.LastSeen).toISOString()
@@ -179,12 +286,185 @@ async function getStatus() {
 }
 
 /**
+ * 嘗試使用 Tailscale 的專用 API 直接獲取可用的 Exit Nodes
+ * 這是較新版本 Tailscale 中提供的功能
+ * @returns {Promise<Array>} Exit Node 列表
+ */
+async function getExitNodesList() {
+  try {
+    console.log("[getExitNodesList] 嘗試使用專用 API 獲取 Exit Nodes 列表");
+
+    // 嘗試不同可能的命令
+    let output;
+    try {
+      // 嘗試標準命令 (Linux/macOS)
+      output = execSync("tailscale exit-nodes list --json", {
+        timeout: 10000,
+      }).toString();
+    } catch (stdError) {
+      console.log("[getExitNodesList] 標準命令失敗:", stdError.message);
+
+      try {
+        // 嘗試 Windows 完整路徑
+        output = execSync(
+          '"C:\\Program Files\\Tailscale\\tailscale.exe" exit-nodes list --json',
+          { timeout: 10000, shell: true }
+        ).toString();
+      } catch (winError) {
+        console.log(
+          "[getExitNodesList] Windows 路徑嘗試失敗:",
+          winError.message
+        );
+
+        try {
+          // 嘗試 Windows 普通路徑
+          output = execSync("tailscale.exe exit-nodes list --json", {
+            timeout: 10000,
+            shell: true,
+          }).toString();
+        } catch (winSimpleError) {
+          console.log(
+            "[getExitNodesList] Windows 簡單路徑嘗試失敗:",
+            winSimpleError.message
+          );
+
+          // 最後嘗試不用 --json 參數
+          output = execSync("tailscale exit-nodes list", {
+            timeout: 10000,
+            shell: true,
+          }).toString();
+        }
+      }
+    }
+
+    // 如果輸出不是 JSON 格式，嘗試解析文本輸出
+    let exitNodes = [];
+    try {
+      // 嘗試解析為 JSON
+      exitNodes = JSON.parse(output);
+      console.log(
+        `[getExitNodesList] 成功解析 JSON，找到 ${exitNodes.length} 個 exit nodes`
+      );
+    } catch (jsonError) {
+      console.log(
+        "[getExitNodesList] 無法解析 JSON，嘗試解析文本輸出:",
+        jsonError.message
+      );
+
+      // 如果不是 JSON，可能是文本格式，嘗試解析
+      const lines = output
+        .split("\n")
+        .filter((line) => line.trim().length > 0)
+        .filter((line) => !line.includes("No exit nodes available"));
+
+      if (lines.length > 1) {
+        // 假設第一行是標題行
+        const dataLines = lines.slice(1);
+        dataLines.forEach((line) => {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            exitNodes.push({
+              hostname: parts[0],
+              ip: parts[1],
+              online: true, // 假設列出的都是在線的
+            });
+          }
+        });
+
+        console.log(
+          `[getExitNodesList] 從文本解析出 ${exitNodes.length} 個 exit nodes`
+        );
+      }
+    }
+
+    return exitNodes;
+  } catch (error) {
+    console.error("[getExitNodesList] 獲取 Exit Nodes 列表失敗:", error);
+    return [];
+  }
+}
+
+/**
  * Enable a specific device as Exit Node
  * @param {string} hostname The hostname of the device to use as exit node
+ * @param {string} [specifiedIp] Optional IP address to use instead of looking it up
  * @returns {Object} Result of the operation
  */
-async function enableExitNode(hostname) {
+async function enableExitNode(hostname, specifiedIp) {
   try {
+    // 先嘗試使用專用 API 獲取 exit nodes 列表
+    const exitNodesList = await getExitNodesList();
+    console.log(
+      `[enableExitNode] 專用 API 返回了 ${exitNodesList.length} 個 exit nodes`
+    );
+
+    if (exitNodesList.length > 0) {
+      // 找到匹配的 exit node
+      const matchedNode = exitNodesList.find(
+        (node) => node.hostname === hostname
+      );
+      if (matchedNode) {
+        console.log(
+          `[enableExitNode] 找到匹配的 exit node: ${JSON.stringify(
+            matchedNode
+          )}`
+        );
+      } else {
+        console.log(`[enableExitNode] 在 exit nodes 列表中未找到: ${hostname}`);
+        console.log(
+          "可用的 exit nodes:",
+          exitNodesList.map((n) => n.hostname)
+        );
+      }
+    }
+
+    // If a specific IP was provided, use it directly
+    if (specifiedIp) {
+      console.log(`[enableExitNode] Using provided IP address: ${specifiedIp}`);
+
+      // Set up the exit node with the specified IP
+      let output;
+      try {
+        // 先嘗試標準指令
+        output = execSync(`tailscale up --exit-node=${specifiedIp}`, {
+          timeout: 15000,
+        }).toString();
+      } catch (cmdError) {
+        console.log(
+          "[enableExitNode] 標準 tailscale 指令失敗，嘗試替代指令路徑...",
+          cmdError.message
+        );
+
+        try {
+          // 嘗試 Windows 平台上的可能完整路徑
+          output = execSync(
+            `"C:\\Program Files\\Tailscale\\tailscale.exe" up --exit-node=${specifiedIp}`,
+            { timeout: 15000, shell: true }
+          ).toString();
+        } catch (winError) {
+          console.log(
+            "[enableExitNode] Windows 路徑嘗試失敗，嘗試其他位置...",
+            winError.message
+          );
+
+          // 最後嘗試一些常見替代位置
+          output = execSync(`tailscale.exe up --exit-node=${specifiedIp}`, {
+            timeout: 15000,
+            shell: true,
+          }).toString();
+        }
+      }
+      console.log(`[enableExitNode] Exit node command output: ${output}`);
+
+      return {
+        success: true,
+        message: `Successfully set ${hostname} as exit node`,
+        ip: specifiedIp,
+        output: output,
+      };
+    }
+
+    // 繼續使用原有流程作為備用
     // First check if the hostname exists
     const status = await getStatus();
     if (!status.success) {
