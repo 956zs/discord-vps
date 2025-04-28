@@ -57,16 +57,8 @@ module.exports = {
 
     if (focusedOption.name === "hostname") {
       try {
-        console.log(
-          "[autocomplete] Starting autocomplete for hostname:",
-          focusedOption.value
-        );
-
-        // 先嘗試使用專用 API 獲取 exit nodes 列表
+        // 嘗試使用專用 API 獲取 exit nodes 列表 - 這通常更快速
         const exitNodesList = await tailscaleMonitor.getExitNodesList();
-        console.log(
-          `[autocomplete] 專用 API 返回了 ${exitNodesList.length} 個 exit nodes`
-        );
 
         if (exitNodesList.length > 0) {
           // 直接使用 exitNodesList 作為選項
@@ -82,17 +74,11 @@ module.exports = {
               .includes(focusedOption.value.toLowerCase())
           );
 
-          console.log(
-            `[autocomplete] 從專用 API 返回 ${filtered.length} 個過濾後的 exit nodes`
-          );
           await interaction.respond(filtered);
           return;
         }
 
         // 如果專用 API 未返回任何結果，使用常規方法
-        console.log("[autocomplete] 專用 API 未返回結果，使用常規方法");
-
-        // Get all available nodes
         const status = await tailscaleMonitor.getStatus();
 
         if (!status.success) {
@@ -103,9 +89,6 @@ module.exports = {
           return;
         }
 
-        // 記錄狀態
-        console.log(`[autocomplete] 獲取到 ${status.peers.length} 個 peers`);
-
         // Filter nodes that can be exit nodes and are online
         const exitNodes = status.peers
           .filter((peer) => peer.exitNode && peer.online)
@@ -114,32 +97,11 @@ module.exports = {
             value: peer.hostname,
           }));
 
-        console.log(
-          `[autocomplete] 找到 ${exitNodes.length} 個符合條件的 exit nodes`
-        );
-        exitNodes.forEach((node) => {
-          console.log(`- Exit node: ${node.name}`);
-        });
-
         // 如果沒有找到 exit nodes，檢查原因並給出特定訊息
         if (exitNodes.length === 0) {
-          console.log("[autocomplete] 未找到符合條件的 exit nodes，檢查原因");
-
-          // 為所有 peers 添加使用者友好的顯示
-          status.peers.forEach((peer) => {
-            console.log(
-              `[autocomplete] ${peer.hostname}: exitNode=${
-                peer.exitNode
-              }, online=${peer.online}, type=${peer.exitNodeType || "none"}`
-            );
-          });
-
           // 檢查是否有任何 peers 是 exit node（不考慮在線狀態）
           const anyExitNodes = status.peers.filter((peer) => peer.exitNode);
           if (anyExitNodes.length > 0) {
-            console.log(
-              `[autocomplete] 找到 ${anyExitNodes.length} 個 exit nodes，但它們離線`
-            );
             await interaction.respond([
               {
                 name: "Found exit nodes but they are offline",
@@ -158,9 +120,6 @@ module.exports = {
                 value: peer.hostname,
               }));
 
-              console.log(
-                `[autocomplete] 提供 ${options.length} 個在線的 peers 作為可能的選項`
-              );
               await interaction.respond([
                 {
                   name: "No detected exit nodes, but you can try these online peers:",
@@ -171,9 +130,6 @@ module.exports = {
               return;
             }
 
-            console.log(
-              `[autocomplete] 找到 ${status.peers.length} 個 peers，但沒有檢測到 exit node 功能`
-            );
             await interaction.respond([
               {
                 name: "Found peers but none are configured as exit nodes",
@@ -194,28 +150,30 @@ module.exports = {
           choice.name.toLowerCase().includes(focusedOption.value.toLowerCase())
         );
 
-        console.log(
-          `[autocomplete] 返回 ${filtered.length} 個過濾後的 exit nodes`
-        );
         await interaction.respond(filtered);
       } catch (error) {
         console.error("[autocomplete] Error in autocomplete:", error);
-        await interaction.respond([
-          {
-            name: "Error occurred: " + error.message.substring(0, 80),
-            value: "error",
-          },
-        ]);
+        try {
+          await interaction.respond([
+            {
+              name: "Error occurred: " + error.message.substring(0, 80),
+              value: "error",
+            },
+          ]);
+        } catch (respondError) {
+          console.error("[autocomplete] Failed to respond:", respondError);
+        }
       }
     }
   },
 
   async execute(interaction) {
-    await interaction.deferReply();
-
-    const subcommand = interaction.options.getSubcommand();
-
     try {
+      // 立即回應，防止 Discord 互動超時
+      await interaction.deferReply();
+
+      const subcommand = interaction.options.getSubcommand();
+
       switch (subcommand) {
         case "status":
           return await this.handleStatus(interaction);
@@ -231,62 +189,94 @@ module.exports = {
           await interaction.editReply({ content: "Unknown subcommand." });
       }
     } catch (error) {
-      console.error(
-        `Error executing Tailscale command (${subcommand}):`,
-        error
-      );
-      await interaction.editReply({
-        content: `An error occurred while executing the command: ${error.message}`,
-      });
+      console.error(`Error executing Tailscale command:`, error);
+
+      try {
+        // 確保無論如何都回應互動
+        if (!interaction.replied && !interaction.deferred) {
+          await interaction.reply({
+            content: `An error occurred: ${error.message}`,
+            flags: { ephemeral: true },
+          });
+        } else if (interaction.deferred) {
+          await interaction.editReply({
+            content: `An error occurred: ${error.message}`,
+          });
+        }
+      } catch (replyError) {
+        console.error(`Failed to send error response:`, replyError);
+      }
     }
   },
 
   async handleStatus(interaction) {
-    const status = await tailscaleMonitor.getStatus();
-    const embed = embedBuilder.createTailscaleStatusEmbed(status);
+    try {
+      const status = await tailscaleMonitor.getStatus();
+      const embed = embedBuilder.createTailscaleStatusEmbed(status);
 
-    // Create refresh button
-    const refreshButton = new ButtonBuilder()
-      .setCustomId("refresh_tailscale_status")
-      .setLabel("Refresh")
-      .setStyle(ButtonStyle.Primary);
+      // Create refresh button
+      const refreshButton = new ButtonBuilder()
+        .setCustomId("refresh_tailscale_status")
+        .setLabel("Refresh")
+        .setStyle(ButtonStyle.Primary);
 
-    // Create network stats button
-    const networkButton = new ButtonBuilder()
-      .setCustomId("tailscale_network_stats")
-      .setLabel("Network Stats")
-      .setStyle(ButtonStyle.Secondary);
+      // Create network stats button
+      const networkButton = new ButtonBuilder()
+        .setCustomId("tailscale_network_stats")
+        .setLabel("Network Stats")
+        .setStyle(ButtonStyle.Secondary);
 
-    const row = new ActionRowBuilder().addComponents(
-      refreshButton,
-      networkButton
-    );
+      const row = new ActionRowBuilder().addComponents(
+        refreshButton,
+        networkButton
+      );
 
-    await interaction.editReply({ embeds: [embed], components: [row] });
+      await interaction.editReply({ embeds: [embed], components: [row] });
+    } catch (error) {
+      console.error("[handleStatus] Error:", error);
+      try {
+        await interaction.editReply({
+          content: `Error getting Tailscale status: ${error.message}`,
+        });
+      } catch (replyError) {
+        console.error("[handleStatus] Error sending reply:", replyError);
+      }
+    }
   },
 
   async handleNetwork(interaction) {
-    const netStats = await tailscaleMonitor.getNetStats();
-    const embed = embedBuilder.createTailscaleNetStatsEmbed(netStats);
+    try {
+      const netStats = await tailscaleMonitor.getNetStats();
+      const embed = embedBuilder.createTailscaleNetStatsEmbed(netStats);
 
-    // Create refresh button
-    const refreshButton = new ButtonBuilder()
-      .setCustomId("refresh_tailscale_network")
-      .setLabel("Refresh")
-      .setStyle(ButtonStyle.Primary);
+      // Create refresh button
+      const refreshButton = new ButtonBuilder()
+        .setCustomId("refresh_tailscale_network")
+        .setLabel("Refresh")
+        .setStyle(ButtonStyle.Primary);
 
-    // Create status button
-    const statusButton = new ButtonBuilder()
-      .setCustomId("tailscale_status")
-      .setLabel("Status")
-      .setStyle(ButtonStyle.Secondary);
+      // Create status button
+      const statusButton = new ButtonBuilder()
+        .setCustomId("tailscale_status")
+        .setLabel("Status")
+        .setStyle(ButtonStyle.Secondary);
 
-    const row = new ActionRowBuilder().addComponents(
-      refreshButton,
-      statusButton
-    );
+      const row = new ActionRowBuilder().addComponents(
+        refreshButton,
+        statusButton
+      );
 
-    await interaction.editReply({ embeds: [embed], components: [row] });
+      await interaction.editReply({ embeds: [embed], components: [row] });
+    } catch (error) {
+      console.error("[handleNetwork] Error:", error);
+      try {
+        await interaction.editReply({
+          content: `Error getting network statistics: ${error.message}`,
+        });
+      } catch (replyError) {
+        console.error("[handleNetwork] Error sending reply:", replyError);
+      }
+    }
   },
 
   async handleExitNode(interaction) {
@@ -297,16 +287,28 @@ module.exports = {
       // Handle the "off" action
       if (action === "off") {
         console.log("[handleExitNode] Disabling exit node");
-        const result = await tailscaleMonitor.disableExitNode();
 
-        if (result.success) {
+        try {
+          const result = await tailscaleMonitor.disableExitNode();
+
+          if (result.success) {
+            await interaction.editReply({
+              embeds: [embedBuilder.buildExitNodeEmbed("disabled", null)],
+            });
+          } else {
+            await interaction.editReply({
+              content: `Failed to disable exit node: ${result.error}`,
+              flags: { ephemeral: true },
+            });
+          }
+        } catch (disableError) {
+          console.error(
+            "[handleExitNode] Error disabling exit node:",
+            disableError
+          );
           await interaction.editReply({
-            embeds: [embedBuilder.buildExitNodeEmbed("disabled", null)],
-          });
-        } else {
-          await interaction.editReply({
-            content: `Failed to disable exit node: ${result.error}`,
-            ephemeral: true,
+            content: `Failed to disable exit node: ${disableError.message}`,
+            flags: { ephemeral: true },
           });
         }
         return;
@@ -316,7 +318,7 @@ module.exports = {
       if (!hostname || hostname === "none") {
         await interaction.editReply({
           content: "Please select a valid exit node from the dropdown list.",
-          ephemeral: true,
+          flags: { ephemeral: true },
         });
         return;
       }
@@ -328,121 +330,158 @@ module.exports = {
       ) {
         await interaction.editReply({
           content: "Please select a valid exit node from the dropdown list.",
-          ephemeral: true,
+          flags: { ephemeral: true },
         });
         return;
       }
 
       console.log(`[handleExitNode] Setting exit node to: ${hostname}`);
 
-      // 先嘗試使用專用 API 獲取 exit nodes 列表
-      const exitNodesList = await tailscaleMonitor.getExitNodesList();
+      try {
+        // 先嘗試使用專用 API 獲取 exit nodes 列表
+        const exitNodesList = await tailscaleMonitor.getExitNodesList();
 
-      let targetNode = null;
+        let targetNode = null;
 
-      // 如果 API 返回結果，使用它來查找目標節點
-      if (exitNodesList.length > 0) {
-        targetNode = exitNodesList.find((node) => node.hostname === hostname);
-        console.log(
-          `[handleExitNode] 從專用 API 查找節點 ${hostname}: ${
-            targetNode ? "找到" : "未找到"
-          }`
-        );
-      }
+        // 如果 API 返回結果，使用它來查找目標節點
+        if (exitNodesList.length > 0) {
+          targetNode = exitNodesList.find((node) => node.hostname === hostname);
+          console.log(
+            `[handleExitNode] 從專用 API 查找節點 ${hostname}: ${
+              targetNode ? "找到" : "未找到"
+            }`
+          );
+        }
 
-      // 如果 API 未找到，使用常規 status 查找
-      if (!targetNode) {
-        console.log(`[handleExitNode] 從常規 status 查找節點 ${hostname}`);
-        const status = await tailscaleMonitor.getStatus();
+        // 如果 API 未找到，使用常規 status 查找
+        if (!targetNode) {
+          console.log(`[handleExitNode] 從常規 status 查找節點 ${hostname}`);
+          const status = await tailscaleMonitor.getStatus();
 
-        if (!status.success) {
+          if (!status.success) {
+            await interaction.editReply({
+              content: `Failed to get Tailscale status: ${status.error}`,
+              flags: { ephemeral: true },
+            });
+            return;
+          }
+
+          // 查找對應的 peer
+          targetNode = status.peers.find((peer) => peer.hostname === hostname);
+        }
+
+        // 檢查是否找到了目標節點
+        if (!targetNode) {
+          console.log(`[handleExitNode] 無法找到節點 ${hostname}`);
           await interaction.editReply({
-            content: `Failed to get Tailscale status: ${status.error}`,
-            ephemeral: true,
+            content: `Could not find a node with hostname: ${hostname}`,
+            flags: { ephemeral: true },
           });
           return;
         }
 
-        // 查找對應的 peer
-        targetNode = status.peers.find((peer) => peer.hostname === hostname);
-      }
+        console.log(
+          `[handleExitNode] 使用節點 ${targetNode.hostname} (${targetNode.ip})`
+        );
 
-      // 檢查是否找到了目標節點
-      if (!targetNode) {
-        console.log(`[handleExitNode] 無法找到節點 ${hostname}`);
+        // 激活 exit node
+        const result = await tailscaleMonitor.enableExitNode(
+          hostname,
+          targetNode.ip
+        );
+
+        if (result.success) {
+          await interaction.editReply({
+            embeds: [embedBuilder.buildExitNodeEmbed("enabled", targetNode)],
+          });
+        } else {
+          await interaction.editReply({
+            content: `Failed to set exit node: ${result.error}`,
+            flags: { ephemeral: true },
+          });
+        }
+      } catch (enableError) {
+        console.error(
+          "[handleExitNode] Error enabling exit node:",
+          enableError
+        );
         await interaction.editReply({
-          content: `Could not find a node with hostname: ${hostname}`,
-          ephemeral: true,
-        });
-        return;
-      }
-
-      console.log(
-        `[handleExitNode] 使用節點 ${targetNode.hostname} (${targetNode.ip})`
-      );
-
-      // 激活 exit node
-      const result = await tailscaleMonitor.enableExitNode(
-        hostname,
-        targetNode.ip
-      );
-
-      if (result.success) {
-        await interaction.editReply({
-          embeds: [embedBuilder.buildExitNodeEmbed("enabled", targetNode)],
-        });
-      } else {
-        await interaction.editReply({
-          content: `Failed to set exit node: ${result.error}`,
-          ephemeral: true,
+          content: `Error enabling exit node: ${enableError.message}`,
+          flags: { ephemeral: true },
         });
       }
     } catch (error) {
       console.error("[handleExitNode] Error:", error);
-      await interaction.editReply({
-        content: `An error occurred: ${error.message}`,
-        ephemeral: true,
-      });
+      try {
+        await interaction.editReply({
+          content: `An error occurred: ${error.message}`,
+          flags: { ephemeral: true },
+        });
+      } catch (replyError) {
+        console.error("[handleExitNode] Error sending reply:", replyError);
+      }
     }
   },
 
   async handleStart(interaction) {
-    const result = await tailscaleMonitor.startTailscale();
-    const embed = embedBuilder.createTailscaleOperationEmbed(result, "start");
+    try {
+      const result = await tailscaleMonitor.startTailscale();
+      const embed = embedBuilder.createTailscaleOperationEmbed(result, "start");
 
-    // Create buttons
-    const statusButton = new ButtonBuilder()
-      .setCustomId("tailscale_status")
-      .setLabel("View Status")
-      .setStyle(ButtonStyle.Primary);
+      // Create buttons
+      const statusButton = new ButtonBuilder()
+        .setCustomId("tailscale_status")
+        .setLabel("View Status")
+        .setStyle(ButtonStyle.Primary);
 
-    const row = new ActionRowBuilder().addComponents(statusButton);
+      const row = new ActionRowBuilder().addComponents(statusButton);
 
-    await interaction.editReply({ embeds: [embed], components: [row] });
+      await interaction.editReply({ embeds: [embed], components: [row] });
+    } catch (error) {
+      console.error("[handleStart] Error:", error);
+      try {
+        await interaction.editReply({
+          content: `Error starting Tailscale: ${error.message}`,
+        });
+      } catch (replyError) {
+        console.error("[handleStart] Error sending reply:", replyError);
+      }
+    }
   },
 
   async handleStop(interaction) {
-    // Create confirmation buttons first
-    const confirmButton = new ButtonBuilder()
-      .setCustomId("confirm_tailscale_stop")
-      .setLabel("Confirm Stop")
-      .setStyle(ButtonStyle.Danger);
+    try {
+      // Create confirmation buttons first
+      const confirmButton = new ButtonBuilder()
+        .setCustomId("confirm_tailscale_stop")
+        .setLabel("Confirm Stop")
+        .setStyle(ButtonStyle.Danger);
 
-    const cancelButton = new ButtonBuilder()
-      .setCustomId("cancel_tailscale_stop")
-      .setLabel("Cancel")
-      .setStyle(ButtonStyle.Secondary);
+      const cancelButton = new ButtonBuilder()
+        .setCustomId("cancel_tailscale_stop")
+        .setLabel("Cancel")
+        .setStyle(ButtonStyle.Secondary);
 
-    const row = new ActionRowBuilder().addComponents(
-      confirmButton,
-      cancelButton
-    );
+      const row = new ActionRowBuilder().addComponents(
+        confirmButton,
+        cancelButton
+      );
 
-    await interaction.editReply({
-      content:
-        "⚠️ **Warning**: Stopping Tailscale will disconnect you from the Tailscale network. Are you sure?",
-      components: [row],
-    });
+      await interaction.editReply({
+        content:
+          "⚠️ **Warning**: Stopping Tailscale will disconnect you from the Tailscale network. Are you sure?",
+        components: [row],
+      });
+    } catch (error) {
+      console.error("[handleStop] Error:", error);
+      try {
+        await interaction.editReply({
+          content: `Error preparing stop confirmation: ${error.message}`,
+        });
+      } catch (replyError) {
+        console.error("[handleStop] Error sending reply:", replyError);
+      }
+    }
   },
 
   // Handle button interactions for this command
@@ -457,31 +496,39 @@ module.exports = {
         customId === "refresh_tailscale_status" ||
         customId === "tailscale_status"
       ) {
-        const status = await tailscaleMonitor.getStatus();
-        const embed = embedBuilder.createTailscaleStatusEmbed(status);
+        try {
+          const status = await tailscaleMonitor.getStatus();
+          const embed = embedBuilder.createTailscaleStatusEmbed(status);
 
-        // Create refresh button
-        const refreshButton = new ButtonBuilder()
-          .setCustomId("refresh_tailscale_status")
-          .setLabel("Refresh")
-          .setStyle(ButtonStyle.Primary);
+          // Create refresh button
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_tailscale_status")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
 
-        // Create network stats button
-        const networkButton = new ButtonBuilder()
-          .setCustomId("tailscale_network_stats")
-          .setLabel("Network Stats")
-          .setStyle(ButtonStyle.Secondary);
+          // Create network stats button
+          const networkButton = new ButtonBuilder()
+            .setCustomId("tailscale_network_stats")
+            .setLabel("Network Stats")
+            .setStyle(ButtonStyle.Secondary);
 
-        const row = new ActionRowBuilder().addComponents(
-          refreshButton,
-          networkButton
-        );
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            networkButton
+          );
 
-        await interaction.editReply({
-          embeds: [embed],
-          components: [row],
-          content: null,
-        });
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+            content: null,
+          });
+        } catch (statusError) {
+          console.error("[handleInteraction] Status error:", statusError);
+          await interaction.editReply({
+            content: `Error refreshing status: ${statusError.message}`,
+            components: [],
+          });
+        }
         return true;
       }
 
@@ -490,89 +537,120 @@ module.exports = {
         customId === "refresh_tailscale_network" ||
         customId === "tailscale_network_stats"
       ) {
-        const netStats = await tailscaleMonitor.getNetStats();
-        const embed = embedBuilder.createTailscaleNetStatsEmbed(netStats);
+        try {
+          const netStats = await tailscaleMonitor.getNetStats();
+          const embed = embedBuilder.createTailscaleNetStatsEmbed(netStats);
 
-        // Create refresh button
-        const refreshButton = new ButtonBuilder()
-          .setCustomId("refresh_tailscale_network")
-          .setLabel("Refresh")
-          .setStyle(ButtonStyle.Primary);
+          // Create refresh button
+          const refreshButton = new ButtonBuilder()
+            .setCustomId("refresh_tailscale_network")
+            .setLabel("Refresh")
+            .setStyle(ButtonStyle.Primary);
 
-        // Create status button
-        const statusButton = new ButtonBuilder()
-          .setCustomId("tailscale_status")
-          .setLabel("Status")
-          .setStyle(ButtonStyle.Secondary);
+          // Create status button
+          const statusButton = new ButtonBuilder()
+            .setCustomId("tailscale_status")
+            .setLabel("Status")
+            .setStyle(ButtonStyle.Secondary);
 
-        const row = new ActionRowBuilder().addComponents(
-          refreshButton,
-          statusButton
-        );
+          const row = new ActionRowBuilder().addComponents(
+            refreshButton,
+            statusButton
+          );
 
-        await interaction.editReply({
-          embeds: [embed],
-          components: [row],
-          content: null,
-        });
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+            content: null,
+          });
+        } catch (networkError) {
+          console.error(
+            "[handleInteraction] Network stats error:",
+            networkError
+          );
+          await interaction.editReply({
+            content: `Error refreshing network stats: ${networkError.message}`,
+            components: [],
+          });
+        }
         return true;
       }
 
       // Confirm stop Tailscale
       else if (customId === "confirm_tailscale_stop") {
-        const result = await tailscaleMonitor.stopTailscale();
-        const embed = embedBuilder.createTailscaleOperationEmbed(
-          result,
-          "stop"
-        );
+        try {
+          const result = await tailscaleMonitor.stopTailscale();
+          const embed = embedBuilder.createTailscaleOperationEmbed(
+            result,
+            "stop"
+          );
 
-        // Create button to start Tailscale
-        const startButton = new ButtonBuilder()
-          .setCustomId("confirm_tailscale_start")
-          .setLabel("Start Tailscale")
-          .setStyle(ButtonStyle.Success);
+          // Create button to start Tailscale
+          const startButton = new ButtonBuilder()
+            .setCustomId("confirm_tailscale_start")
+            .setLabel("Start Tailscale")
+            .setStyle(ButtonStyle.Success);
 
-        const row = new ActionRowBuilder().addComponents(startButton);
+          const row = new ActionRowBuilder().addComponents(startButton);
 
-        await interaction.editReply({
-          embeds: [embed],
-          components: [row],
-          content: null,
-        });
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+            content: null,
+          });
+        } catch (stopError) {
+          console.error("[handleInteraction] Stop error:", stopError);
+          await interaction.editReply({
+            content: `Error stopping Tailscale: ${stopError.message}`,
+            components: [],
+          });
+        }
         return true;
       }
 
       // Cancel stop Tailscale
       else if (customId === "cancel_tailscale_stop") {
-        await interaction.editReply({
-          content: "Cancelled. Tailscale service will continue running.",
-          components: [],
-          embeds: [],
-        });
+        try {
+          await interaction.editReply({
+            content: "Cancelled. Tailscale service will continue running.",
+            components: [],
+            embeds: [],
+          });
+        } catch (cancelError) {
+          console.error("[handleInteraction] Cancel error:", cancelError);
+        }
         return true;
       }
 
       // Confirm start Tailscale
       else if (customId === "confirm_tailscale_start") {
-        const result = await tailscaleMonitor.startTailscale();
-        const embed = embedBuilder.createTailscaleOperationEmbed(
-          result,
-          "start"
-        );
+        try {
+          const result = await tailscaleMonitor.startTailscale();
+          const embed = embedBuilder.createTailscaleOperationEmbed(
+            result,
+            "start"
+          );
 
-        // Create status button
-        const statusButton = new ButtonBuilder()
-          .setCustomId("tailscale_status")
-          .setLabel("View Status")
-          .setStyle(ButtonStyle.Primary);
+          // Create status button
+          const statusButton = new ButtonBuilder()
+            .setCustomId("tailscale_status")
+            .setLabel("View Status")
+            .setStyle(ButtonStyle.Primary);
 
-        const row = new ActionRowBuilder().addComponents(statusButton);
+          const row = new ActionRowBuilder().addComponents(statusButton);
 
-        await interaction.editReply({
-          embeds: [embed],
-          components: [row],
-          content: null,
-        });
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+            content: null,
+          });
+        } catch (startError) {
+          console.error("[handleInteraction] Start error:", startError);
+          await interaction.editReply({
+            content: `Error starting Tailscale: ${startError.message}`,
+            components: [],
+          });
+        }
         return true;
       }
 

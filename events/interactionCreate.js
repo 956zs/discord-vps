@@ -73,7 +73,7 @@ module.exports = {
           try {
             await interaction.reply({
               content: "There was an error executing this command.",
-              ephemeral: true,
+              flags: { ephemeral: true },
             });
           } catch (replyError) {
             console.error("Could not send error reply:", replyError);
