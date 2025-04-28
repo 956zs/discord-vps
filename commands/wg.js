@@ -143,8 +143,9 @@ module.exports = {
           .setLabel("Public Key")
           .setPlaceholder("e.g., abc123DEF456ghi789JKL...")
           .setRequired(true)
-          .setStyle(TextInputStyle.Paragraph);
-
+          .setStyle(TextInputStyle.Paragraph)
+          .setMinLength(42)
+          .setMaxLength(46);
         // Allowed IPs input
         const allowedIPsInput = new TextInputBuilder()
           .setCustomId("allowed_ips")
