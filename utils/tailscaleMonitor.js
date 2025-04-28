@@ -363,7 +363,15 @@ async function getExitNodesList() {
     const lines = output
       .split("\n")
       .filter((line) => line.trim().length > 0)
-      .filter((line) => !line.includes("No exit nodes available"));
+      .filter((line) => !line.includes("No exit nodes available"))
+      // Filter out help/hint lines that start with # or contain common help text
+      .filter(
+        (line) =>
+          !line.trim().startsWith("#") &&
+          !line.includes("(To)") &&
+          !line.includes("Usage:") &&
+          !line.includes("Options:")
+      );
 
     console.log("[getExitNodesList] Raw output lines:", lines.length);
 
@@ -394,22 +402,30 @@ async function getExitNodesList() {
             ip = parts[1];
           }
 
-          exitNodes.push({
-            hostname: hostname,
-            ip: ip,
-            online: true, // Assume listed nodes are online
-          });
+          // Skip entries that don't look like valid IPs or hostnames
+          if (
+            ip &&
+            hostname &&
+            (ip.includes(".") || ip.includes(":")) &&
+            !hostname.includes("(To)") &&
+            !hostname.includes("Usage:")
+          ) {
+            exitNodes.push({
+              hostname: hostname,
+              ip: ip,
+              online: true, // Assume listed nodes are online
+            });
+          }
         }
       });
-
-      console.log(
-        `[getExitNodesList] Parsed ${exitNodes.length} exit nodes from text`
-      );
     }
 
+    console.log(
+      `[getExitNodesList] Found ${exitNodes.length} valid exit nodes`
+    );
     return exitNodes;
   } catch (error) {
-    console.error("[getExitNodesList] Failed to get exit nodes list:", error);
+    console.error("[getExitNodesList] Error:", error);
     return [];
   }
 }
@@ -459,13 +475,33 @@ async function enableExitNode(hostname, specifiedIp) {
     const platform = process.platform;
     console.log(`[enableExitNode] Platform: ${platform}`);
 
-    // Try to verify tailscale is running
+    // Try to verify tailscale is running - only if we have a valid target
+    // Get a list of peers to use as ping targets
+    let pingTarget = null;
     try {
-      const pingOutput = executeTailscaleCommand("ping", {
-        shouldThrow: false,
-      });
-      if (pingOutput) {
-        console.log("[enableExitNode] Tailscale is responsive");
+      const status = await getStatus();
+      if (status && status.peers && status.peers.length > 0) {
+        // Use the first online peer as a ping target
+        const onlinePeer = status.peers.find((peer) => peer.online);
+        if (onlinePeer && onlinePeer.ip) {
+          pingTarget = onlinePeer.ip.split(",")[0].trim(); // Get first IP if multiple
+        }
+      }
+
+      // If we found a valid target, try to ping it
+      if (pingTarget) {
+        console.log(`[enableExitNode] Using ${pingTarget} as ping target`);
+        const pingOutput = executeTailscaleCommand("ping", {
+          args: pingTarget,
+          shouldThrow: false,
+        });
+        if (pingOutput) {
+          console.log("[enableExitNode] Tailscale is responsive");
+        }
+      } else {
+        console.log(
+          "[enableExitNode] No valid ping target available, skipping ping check"
+        );
       }
     } catch (pingError) {
       console.log(
