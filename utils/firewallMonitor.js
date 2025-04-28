@@ -366,8 +366,47 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + " " + sizes[i];
 }
 
+/**
+ * Get detailed firewall rules output
+ * @returns {Promise<Object>} Detailed firewall rules output
+ */
+async function getDetailedRules() {
+  try {
+    // Check if we can run iptables
+    try {
+      await execPromise("which iptables");
+    } catch (error) {
+      return {
+        success: false,
+        error: "iptables is not available on this system",
+      };
+    }
+
+    // Get raw iptables output in different formats
+    const [saveRules, listRules] = await Promise.all([
+      execPromise("iptables-save"),
+      execPromise("iptables -L -v -n"),
+    ]);
+
+    return {
+      success: true,
+      rules: {
+        saveFormat: saveRules.stdout,
+        listFormat: listRules.stdout,
+      },
+    };
+  } catch (error) {
+    console.error("Error getting detailed firewall rules:", error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+
 module.exports = {
   getFirewallStatus,
   blockIP,
   unblockIP,
+  getDetailedRules,
 };

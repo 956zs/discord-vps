@@ -1038,6 +1038,54 @@ function createFirewallOperationEmbed(result, operation) {
   return embed;
 }
 
+/**
+ * Create a detailed firewall rules embed
+ * @param {Object} detailedRules - Detailed rules from firewallMonitor.js
+ * @returns {EmbedBuilder} Discord embed
+ */
+function createDetailedFirewallRulesEmbed(detailedRules) {
+  const embed = new EmbedBuilder()
+    .setColor("#DD5555")
+    .setTitle("Detailed Firewall Rules")
+    .setTimestamp();
+
+  if (!detailedRules.success) {
+    embed.setDescription(`Error: ${detailedRules.error}`);
+    return embed;
+  }
+
+  // Add a short introduction
+  embed.setDescription(
+    "Detailed iptables firewall rules in list format. For complete configuration, check the attached text file."
+  );
+
+  // Format the list output into blocks of reasonable size
+  const listOutput = detailedRules.rules.listFormat;
+
+  // Split by chains to get manageable chunks
+  const chains = ["INPUT", "OUTPUT", "FORWARD"];
+
+  chains.forEach((chain) => {
+    const chainRegex = new RegExp(`Chain ${chain}[\\s\\S]*?(?=Chain|$)`, "g");
+    const chainMatch = listOutput.match(chainRegex);
+
+    if (chainMatch && chainMatch[0]) {
+      // Limit to reasonable size per field
+      let content = chainMatch[0];
+      if (content.length > 1020) {
+        content = content.substring(0, 1020) + "...";
+      }
+
+      embed.addFields({
+        name: `${chain} Chain Rules`,
+        value: "```\n" + content + "\n```",
+      });
+    }
+  });
+
+  return embed;
+}
+
 module.exports = {
   createSystemInfoEmbed,
   createNetworkInfoEmbed,
@@ -1059,4 +1107,5 @@ module.exports = {
   // Firewall embeds
   createFirewallStatusEmbed,
   createFirewallOperationEmbed,
+  createDetailedFirewallRulesEmbed,
 };

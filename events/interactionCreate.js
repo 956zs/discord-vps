@@ -1584,9 +1584,95 @@ module.exports = {
           .setLabel("Refresh")
           .setStyle(ButtonStyle.Primary);
 
-        const row = new ActionRowBuilder().addComponents(refreshButton);
+        // Add a "Show Detailed Rules" button
+        const detailedRulesButton = new ButtonBuilder()
+          .setCustomId("firewall_detailed_rules")
+          .setLabel("🔍 Show Detailed Rules")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          detailedRulesButton
+        );
 
         await interaction.editReply({ embeds: [embed], components: [row] });
+      }
+
+      // Firewall detailed rules button
+      else if (customId === "firewall_detailed_rules") {
+        const firewallMonitor = require("../utils/firewallMonitor");
+
+        // Show a loading message while fetching the rules
+        await interaction.deferUpdate();
+
+        // Get the detailed rules
+        const detailedRules = await firewallMonitor.getDetailedRules();
+
+        // Create the embed with the rules
+        const embed =
+          embedBuilder.createDetailedFirewallRulesEmbed(detailedRules);
+
+        // Create a back button
+        const backButton = new ButtonBuilder()
+          .setCustomId("back_to_firewall_status")
+          .setLabel("Back to Summary")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(backButton);
+
+        // If rules are successful, also create a text file with the full rules
+        if (detailedRules.success) {
+          // Generate a text file with the complete rules
+          const rulesContent = `# iptables-save format\n\n${detailedRules.rules.saveFormat}\n\n# iptables -L -v -n format\n\n${detailedRules.rules.listFormat}`;
+          const buffer = Buffer.from(rulesContent, "utf-8");
+
+          const attachment = {
+            attachment: buffer,
+            name: "firewall-rules.txt",
+            description: "Complete firewall rules",
+          };
+
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+            files: [attachment],
+          });
+        } else {
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+          });
+        }
+      }
+
+      // Back to firewall status button
+      else if (customId === "back_to_firewall_status") {
+        const firewallMonitor = require("../utils/firewallMonitor");
+        const firewallData = await firewallMonitor.getFirewallStatus();
+        const embed = embedBuilder.createFirewallStatusEmbed(firewallData);
+
+        // Create refresh button
+        const refreshButton = new ButtonBuilder()
+          .setCustomId("refresh_firewall_status")
+          .setLabel("Refresh")
+          .setStyle(ButtonStyle.Primary);
+
+        // Add a "Show Detailed Rules" button
+        const detailedRulesButton = new ButtonBuilder()
+          .setCustomId("firewall_detailed_rules")
+          .setLabel("🔍 Show Detailed Rules")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          detailedRulesButton
+        );
+
+        await interaction.editReply({
+          embeds: [embed],
+          components: [row],
+          files: [], // Remove any attached files
+        });
       }
 
       // Confirm firewall IP block

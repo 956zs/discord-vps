@@ -94,11 +94,93 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    await interaction.deferReply();
-
     const subcommand = interaction.options.getSubcommand();
 
     try {
+      // Special handling for add-peer to avoid interaction issues
+      if (subcommand === "add-peer") {
+        const interfaceName = interaction.options.getString("interface");
+
+        // First check if the interface exists
+        const interfacesData = await wireguardMonitor.listInterfaces();
+
+        if (!interfacesData.success) {
+          await interaction.reply({
+            content: `Error checking WireGuard interfaces: ${interfacesData.error}`,
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const interfaceExists = interfacesData.interfaces.some(
+          (i) => i.name === interfaceName
+        );
+
+        if (!interfaceExists) {
+          await interaction.reply({
+            content: `Interface ${interfaceName} not found.`,
+            ephemeral: true,
+          });
+          return;
+        }
+
+        // Create and show modal for peer information
+        const modal = new ModalBuilder()
+          .setCustomId(`wg_add_peer_modal_${interfaceName}`)
+          .setTitle(`Add Peer to ${interfaceName}`);
+
+        // Peer name input
+        const nameInput = new TextInputBuilder()
+          .setCustomId("peer_name")
+          .setLabel("Peer Name (optional)")
+          .setPlaceholder("e.g., User1 Phone")
+          .setRequired(false)
+          .setStyle(TextInputStyle.Short);
+
+        // Public key input
+        const publicKeyInput = new TextInputBuilder()
+          .setCustomId("public_key")
+          .setLabel("Public Key")
+          .setPlaceholder("e.g., abc123DEF456ghi789JKL...")
+          .setRequired(true)
+          .setStyle(TextInputStyle.Paragraph);
+
+        // Allowed IPs input
+        const allowedIPsInput = new TextInputBuilder()
+          .setCustomId("allowed_ips")
+          .setLabel("Allowed IPs")
+          .setPlaceholder("e.g., 10.0.0.2/32, 192.168.1.0/24")
+          .setRequired(true)
+          .setStyle(TextInputStyle.Short);
+
+        // Endpoint input (optional)
+        const endpointInput = new TextInputBuilder()
+          .setCustomId("endpoint")
+          .setLabel("Endpoint (optional)")
+          .setPlaceholder("e.g., user.example.com:51820")
+          .setRequired(false)
+          .setStyle(TextInputStyle.Short);
+
+        // Add inputs to the modal
+        const nameRow = new ActionRowBuilder().addComponents(nameInput);
+        const publicKeyRow = new ActionRowBuilder().addComponents(
+          publicKeyInput
+        );
+        const allowedIPsRow = new ActionRowBuilder().addComponents(
+          allowedIPsInput
+        );
+        const endpointRow = new ActionRowBuilder().addComponents(endpointInput);
+
+        modal.addComponents(nameRow, publicKeyRow, allowedIPsRow, endpointRow);
+
+        // Show the modal without deferring the reply first
+        await interaction.showModal(modal);
+        return;
+      }
+
+      // For all other commands, defer the reply first
+      await interaction.deferReply();
+
       // Handle different subcommands
       if (subcommand === "status") {
         // Get WireGuard interfaces status
@@ -184,82 +266,6 @@ module.exports = {
           content: `Are you sure you want to restart WireGuard interface \`${interfaceName}\`? This may disrupt active VPN connections.`,
           components: [row],
         });
-      } else if (subcommand === "add-peer") {
-        const interfaceName = interaction.options.getString("interface");
-
-        // First check if the interface exists
-        const interfacesData = await wireguardMonitor.listInterfaces();
-
-        if (!interfacesData.success) {
-          await interaction.editReply({
-            content: `Error checking WireGuard interfaces: ${interfacesData.error}`,
-          });
-          return;
-        }
-
-        const interfaceExists = interfacesData.interfaces.some(
-          (i) => i.name === interfaceName
-        );
-
-        if (!interfaceExists) {
-          await interaction.editReply({
-            content: `Interface ${interfaceName} not found.`,
-          });
-          return;
-        }
-
-        // Create and show modal for peer information
-        const modal = new ModalBuilder()
-          .setCustomId(`wg_add_peer_modal_${interfaceName}`)
-          .setTitle(`Add Peer to ${interfaceName}`);
-
-        // Peer name input
-        const nameInput = new TextInputBuilder()
-          .setCustomId("peer_name")
-          .setLabel("Peer Name (optional)")
-          .setPlaceholder("e.g., User1 Phone")
-          .setRequired(false)
-          .setStyle(TextInputStyle.Short);
-
-        // Public key input
-        const publicKeyInput = new TextInputBuilder()
-          .setCustomId("public_key")
-          .setLabel("Public Key")
-          .setPlaceholder("e.g., abc123DEF456ghi789JKL...")
-          .setRequired(true)
-          .setStyle(TextInputStyle.Paragraph);
-
-        // Allowed IPs input
-        const allowedIPsInput = new TextInputBuilder()
-          .setCustomId("allowed_ips")
-          .setLabel("Allowed IPs")
-          .setPlaceholder("e.g., 10.0.0.2/32, 192.168.1.0/24")
-          .setRequired(true)
-          .setStyle(TextInputStyle.Short);
-
-        // Endpoint input (optional)
-        const endpointInput = new TextInputBuilder()
-          .setCustomId("endpoint")
-          .setLabel("Endpoint (optional)")
-          .setPlaceholder("e.g., user.example.com:51820")
-          .setRequired(false)
-          .setStyle(TextInputStyle.Short);
-
-        // Add inputs to the modal
-        const nameRow = new ActionRowBuilder().addComponents(nameInput);
-        const publicKeyRow = new ActionRowBuilder().addComponents(
-          publicKeyInput
-        );
-        const allowedIPsRow = new ActionRowBuilder().addComponents(
-          allowedIPsInput
-        );
-        const endpointRow = new ActionRowBuilder().addComponents(endpointInput);
-
-        modal.addComponents(nameRow, publicKeyRow, allowedIPsRow, endpointRow);
-
-        // Show the modal
-        await interaction.deleteReply(); // Need to delete the reply first
-        await interaction.showModal(modal);
       } else if (subcommand === "remove-peer") {
         const interfaceName = interaction.options.getString("interface");
         const publicKey = interaction.options.getString("publickey");
@@ -287,9 +293,16 @@ module.exports = {
       }
     } catch (error) {
       console.error("Error in WireGuard command:", error);
-      await interaction.editReply({
-        content: "There was an error executing this command.",
-      });
+      // Only attempt to reply if we haven't already shown a modal
+      if (subcommand !== "add-peer") {
+        try {
+          await interaction.editReply({
+            content: "There was an error executing this command.",
+          });
+        } catch (replyError) {
+          console.error("Error sending error message:", replyError);
+        }
+      }
     }
   },
 

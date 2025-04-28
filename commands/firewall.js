@@ -72,7 +72,16 @@ module.exports = {
           .setLabel("Refresh")
           .setStyle(ButtonStyle.Primary);
 
-        const row = new ActionRowBuilder().addComponents(refreshButton);
+        // Add a "Show Detailed Rules" button
+        const detailedRulesButton = new ButtonBuilder()
+          .setCustomId("firewall_detailed_rules")
+          .setLabel("🔍 Show Detailed Rules")
+          .setStyle(ButtonStyle.Secondary);
+
+        const row = new ActionRowBuilder().addComponents(
+          refreshButton,
+          detailedRulesButton
+        );
 
         await interaction.editReply({ embeds: [embed], components: [row] });
       } else if (subcommand === "block") {
